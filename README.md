@@ -6,7 +6,7 @@ Generally, draft scripts and whatnot unless otherwise noted in this README.
 
 | Script | Description | Status |
 |------|-------------|--------|
-| `cnr2_bm3d.py` | Replacement for venerable CNR2, denoising chroma in chroma-noisy VHS captures.<br>Handles interlaced PAL/NTSC sources via parity-split field processing.<br>Auto-detects and if required estimates, matrix, range, and field order from frame properties using jetpack.<br>Uses quality bm3dcpu for denoising, and bwdif for optional deinterlacing. | 🚧 Under construction |
+| `cnr2_bm3d.py` | Replacement for venerable CNR2, denoising chroma in chroma-noisy VHS captures.<br>Handles interlaced PAL/NTSC sources via parity-split field processing.<br>Auto-detects and if required estimates, matrix, range, and field order from frame properties using jetpack.<br>Uses quality bm3dcpu for quality denoising, and bwdif for optional deinterlacing. | 🚧 Under construction |
 
 ## Seems to work
 
