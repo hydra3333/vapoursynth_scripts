@@ -1,5 +1,5 @@
 """
-Replacement for CNR2 chroma denoising, using bm3dcpu for chroma denoising and bwdif for deinterlacing.
+Replacement for Vapoursynth CNR2 chroma denoising, using bm3dcpu for chroma denoising and bwdif for deinterlacing.
     - Intended for use with chroma-noisey VHS captures eg for VHS-C home movies.
     - Defaults to chroma-only denoising, with optional LUMA denoising via sigma_luma.
     - Handles both progressive and interlaced (PAL/NTSC) YUV sources.
