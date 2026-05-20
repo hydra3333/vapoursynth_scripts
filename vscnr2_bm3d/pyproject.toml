@@ -34,6 +34,7 @@ classifiers = [
 ]
 
 dependencies = [
+    "pymediainfo",
     "vsjetpack",
     "vapoursynth-fmtconv",
     "vapoursynth-bm3dcpu",
