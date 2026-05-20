@@ -7,10 +7,11 @@ name = "vscnr2-bm3d"
 version = "0.1.0"
 description = "VapourSynth CNR2-replacement chroma denoising replacement using bm3dcpu, with optional luma denoising and bwdif deinterlacing."
 readme = "README.md"
-requires-python = ">=3.14"
-license = { text = "MIT" }
+requires-python = ">=3.13"
+license = { text = "AGPL-3.0-or-later" }
+license-files = ["LICENSE"]
 authors = [
-    { name = "David Walsh" }
+    { name = "hydra3333" }
 ]
 keywords = [
     "vapoursynth",
@@ -27,8 +28,9 @@ classifiers = [
     "Topic :: Multimedia :: Video",
     "Topic :: Multimedia :: Video :: Conversion",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.14",
+    "Programming Language :: Python :: 3.13",
     "Operating System :: Microsoft :: Windows",
+    "License :: OSI Approved :: GNU Affero General Public License v3",
 ]
 
 dependencies = [
