@@ -37,6 +37,7 @@ dependencies = [
     "vsjetpack",
     "vapoursynth-fmtconv",
     "vapoursynth-bm3dcpu",
+    "vapoursynth-znedi3",
     "vapoursynth-bwdif",
 ]
 
