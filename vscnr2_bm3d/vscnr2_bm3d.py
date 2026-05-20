@@ -76,7 +76,7 @@ Dependencies:
     vapoursynth R76+
     vsjetpack             (pip install vsjetpack)            - for vstools stuff including video_heuristics()
     fmtconv               (pip install vapoursynth-fmtconv)  - for format conversions
-    vapoursynth-bm3dcpu   (pip install vapoursynth-bm3dcpu)  - for denoising chroma
+    vapoursynth-bm3dcpu   (pip install vapoursynth-bm3dcpu)  - for chroma denoising and optional luma denoising
     vapoursynth-bwdif     (pip install vapoursynth-bwdif)    - for optional de3interlacing
 
 Assumptions:
@@ -613,7 +613,7 @@ def _validate_user_parameters(
     limited: Optional[bool],
     tff: Optional[bool],
     deinterlace: bool,
-    deinterlace_rate[str],
+    deinterlace_rate: str,
     show_info: bool,
 ) -> None:
     """
@@ -797,7 +797,8 @@ def _from_444ps(clip: vs.VideoNode, info: ClipInfo) -> vs.VideoNode:
     return clip
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Core BM3D chroma denoising (operates on YUV444PS only)
+# Core BM3D chroma denoising with optional luma denoising
+# (operates on YUV444PS only)
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _bm3d_chroma_with_optional_luma(
