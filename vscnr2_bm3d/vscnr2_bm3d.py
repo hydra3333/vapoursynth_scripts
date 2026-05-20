@@ -11,18 +11,20 @@ Main Function:
     def cnr2_bm3d(
         clip: vs.VideoNode,
         sigma_uv: float = 3.5,
-        sigma_luma: float = 0.0,        # OPTIONAL TO DENOISE LUMA, 0.0=preserve luma, >0.0=optional luma denoise
-        radius: int = 1,                # 0=spatial only, 1-9=temporal window
-        full_quality: bool = True,
-        # Override auto-detection if you know better:
-        matrix: Optional[str] = None,   # e.g. "470bg", "601", "709" - None = auto
-        limited: Optional[bool] = None, # True=TV range, False=PC - None = auto
-        tff: Optional[bool] = None,     # True=TFF, False=BFF - None = auto
+        sigma_luma: float = 0.0,                # OPTIONAL TO DENOISE LUMA, 0.0=preserve luma, >0.0=optional luma denoise
+        radius: int = 1,                        # 0=spatial only, 1-9=temporal window
+        full_quality_denoise: bool = True,      # Run two BM3Dv2 passes (Wiener refinement) for high quality whihc is Slower
+        #--- Override auto-detection ONLY if you know better:
+        matrix: Optional[str] = None,           # NORMALLY DO NOT SPECIFY THIS e.g. "470bg", "601", "709" - None = auto
+        limited: Optional[bool] = None,         # NORMALLY DO NOT SPECIFY THIS True=TV range, False=PC - None = auto
+        tff: Optional[bool] = None,             # NORMALLY DO NOT SPECIFY THIS True=TFF, False=BFF - None = auto
+        #---
         # Deinterlace after processing?
-        deinterlace: bool = False,      # requires vapoursynth-bwdif
-        deinterlace_rate: str = "same", # eg "same"=25i->25p, "double"=25i->50p
+        deinterlace: bool = False,              # requires vapoursynth-bwdif
+        deinterlace_rate: str = "same",         # eg "same"=25i->25p, "double"=25i->50p
+        deinterlace_quality: str = "standard",  # "standard"=bwdif, "enhanced"=bwdif+znedi3 via edeint
         # Debug
-        show_info: bool = False,        # print detected ClipInfo before processing
+        show_info: bool = False,                # print detected ClipInfo before processing
     ) -> vs.VideoNode:
 
     Args:
@@ -44,7 +46,7 @@ Main Function:
                       practical values with 3 and 4 as safety headroom.
                       With field-split interlaced, each unit of radius spans
                       one same-parity field = one full interlaced frame.
-        full_quality: Run two BM3Dv2 passes (Wiener refinement). Slower
+        full_quality_denoise: Run two BM3Dv2 passes (Wiener refinement). Slower
                       but meaningfully better quality. Recommended for
                       final encodes.
         matrix:       Override detected colour matrix. None = auto-detect.
@@ -58,6 +60,12 @@ Main Function:
                       "same"   = same-rate progressive output, e.g. 25i -> 25p or 29.97i -> 29.97p.
                       "double" = double-rate progressive output, e.g. 25i -> 50p or 29.97i -> 59.94p.
                       Case is ignored, so "Same", "SAME", "Double", and "DOUBLE" are accepted.
+        deinterlace_quality:
+                      Only used when deinterlace=True.
+                      "standard" = normal bwdif deinterlacing.
+                      "enhanced" = bwdif with a znedi3/nnedi3 edeint helper
+                                   for higher-quality spatial prediction.
+                      Case is ignored, so "Standard", "STANDARD", "Enhanced", and "ENHANCED" are accepted.
         show_info:    If True, print the detected ClipInfo before processing.
                       Useful for verifying auto-detection on a new source.
 Notes:
@@ -102,7 +110,7 @@ light = cnr2_bm3d(
     clip,
     sigma_uv=1.5,
     radius=1,
-    full_quality=False,
+    full_quality_denoise=False,
     deinterlace=False,   # stay interlaced; deinterlace downstream in your own pipeline if you need
     show_info=True,      # print detected properties on first call for verification
 )
@@ -114,7 +122,7 @@ light = cnr2_bm3d(
     sigma_uv=1.5,
     sigma_luma=0.5,      # do optional light LUMA denoising as well
     radius=1,
-    full_quality=False,
+    full_quality_denoise=False,
     deinterlace=False,   # stay interlaced; deinterlace downstream in your own pipeline if you need
     show_info=True,      # print detected properties on first call for verification
 )
@@ -125,9 +133,10 @@ medium = cnr2_bm3d(
     clip,
     sigma_uv=3.5,
     radius=1,
-    full_quality=True,
+    full_quality_denoise=True,
     deinterlace=True,
     deinterlace_rate="same",
+    deinterlace_quality="standard",
 )
 
 ## MEDIUM - approximately CNR2 chroma defaults
@@ -138,9 +147,10 @@ medium = cnr2_bm3d(
     sigma_uv=3.5,
     sigma_luma=1.0,      # do optional medium LUMA denoising as well
     radius=1,
-    full_quality=True,
+    full_quality_denoise=True,
     deinterlace=True,
     deinterlace_rate="same",
+    deinterlace_quality="enhanced",
 )
 
 ## HEAVY - badly degraded VHS tape, wider temporal window
@@ -149,9 +159,10 @@ heavy = cnr2_bm3d(
     clip,
     sigma_uv=8.0,
     radius=2,             # 5 same-parity fields per output field (~200ms context)
-    full_quality=True,
+    full_quality_denoise=True,
     deinterlace=True,
     deinterlace_rate="double",
+    deinterlace_quality="standard",
 )
 
 ## HEAVY - badly degraded VHS tape, wider temporal window
@@ -162,9 +173,10 @@ heavy = cnr2_bm3d(
     sigma_uv=8.0,
     sigma_luma=2.0,       # do optional heavy LUMA denoising as well
     radius=2,             # 5 same-parity fields per output field (~200ms context)
-    full_quality=True,
+    full_quality_denoise=True,
     deinterlace=True,
     deinterlace_rate="double",
+    deinterlace_quality="enhanced",
 )
 """
 
@@ -542,7 +554,46 @@ def _set_output_props(
 # Dependency checking helpers
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _check_dependencies(deinterlace: bool) -> None:
+def _get_bwdif_filter():
+    """
+    Return the loaded bwdif callable.
+
+    Current vapoursynth-bwdif documentation names the callable Bwdif.  Some
+    older examples used different capitalization, so this helper accepts the
+    documented name first and then checks the older-looking alias.
+    """
+    if hasattr(core, "bwdif"):
+        if hasattr(core.bwdif, "Bwdif"):
+            return core.bwdif.Bwdif
+        if hasattr(core.bwdif, "BwDif"):
+            return core.bwdif.BwDif
+    raise RuntimeError(
+        "cnr2_bm3d: deinterlace=True requires the bwdif plugin.\n"
+        "  Install it into this portable Python with:\n"
+        "  pip install vapoursynth-bwdif"
+    )
+
+def _get_znedi3_filter():
+    """
+    Return the loaded znedi3/nnedi3 callable used for enhanced deinterlacing.
+
+    The vapoursynth-znedi3 documentation exposes the function as
+    nnedi3.nnedi3(...).  This helper also checks core.znedi3.nnedi3 in case a
+    particular build exposes the namespace that way.
+    """
+    if hasattr(core, "nnedi3") and hasattr(core.nnedi3, "nnedi3"):
+        return core.nnedi3.nnedi3
+    if hasattr(core, "znedi3") and hasattr(core.znedi3, "nnedi3"):
+        return core.znedi3.nnedi3
+    raise RuntimeError(
+        'cnr2_bm3d: deinterlace_quality="enhanced" requires the znedi3 plugin.\n'
+        "  Install it into this portable Python with:\n"
+        "  pip install vapoursynth-znedi3\n"
+        "  The nnedi3_weights.bin file must also be available as required by "
+        "the znedi3 plugin."
+    )
+
+def _check_dependencies(deinterlace: bool, deinterlace_quality: str) -> None:
     """
     Check required Python imports and VapourSynth plugin namespaces before
     expensive processing starts.
@@ -586,17 +637,9 @@ def _check_dependencies(deinterlace: bool) -> None:
             "core.bm3dcpu.BM3Dv2 is unavailable."
         )
     if deinterlace:
-        if not hasattr(core, "bwdif"):
-            raise RuntimeError(
-                "cnr2_bm3d: deinterlace=True requires the bwdif plugin.\n"
-                "  Install it into this portable Python with:\n"
-                "  pip install vapoursynth-bwdif"
-            )
-        if not hasattr(core.bwdif, "BwDif"):
-            raise RuntimeError(
-                "cnr2_bm3d: bwdif plugin is loaded, but "
-                "core.bwdif.BwDif is unavailable."
-            )
+        _get_bwdif_filter()
+        if deinterlace_quality == "enhanced":
+            _get_znedi3_filter()
 
 # ─────────────────────────────────────────────────────────────────────────────
 # User parameter validation helpers
@@ -621,17 +664,42 @@ def _normalize_deinterlace_rate(deinterlace_rate: str) -> str:
         raise ValueError('cnr2_bm3d: deinterlace_rate must be "same" or "double"')
     return rate
 
+def _normalize_deinterlace_quality(deinterlace_quality: str) -> str:
+    """
+    Normalize the requested deinterlace quality mode.
+
+    Accepted values:
+        "standard" = normal bwdif deinterlacing.
+        "enhanced" = bwdif with an external znedi3/nnedi3 edeint clip used
+                     for higher-quality spatial predictions.
+
+    Case is ignored so user input such as "Standard", "STANDARD", "Enhanced",
+    and "ENHANCED" is accepted, but the rest of the script only sees the
+    canonical lower-case values.
+    """
+    if not isinstance(deinterlace_quality, str):
+        raise TypeError(
+            'cnr2_bm3d: deinterlace_quality must be "standard" or "enhanced"'
+        )
+    quality = deinterlace_quality.strip().lower()
+    if quality not in {"standard", "enhanced"}:
+        raise ValueError(
+            'cnr2_bm3d: deinterlace_quality must be "standard" or "enhanced"'
+        )
+    return quality
+
 def _validate_user_parameters(
     clip: vs.VideoNode,
     sigma_uv: float,
     sigma_luma: float,
     radius: int,
-    full_quality: bool,
+    full_quality_denoise: bool,
     matrix: Optional[str],
     limited: Optional[bool],
     tff: Optional[bool],
     deinterlace: bool,
     deinterlace_rate: str,
+    deinterlace_quality: str,
     show_info: bool,
 ) -> None:
     """
@@ -670,8 +738,8 @@ def _validate_user_parameters(
             "with the temporal window size."
         )
 
-    if not isinstance(full_quality, bool):
-        raise TypeError("cnr2_bm3d: full_quality must be True or False")
+    if not isinstance(full_quality_denoise, bool):
+        raise TypeError("cnr2_bm3d: full_quality_denoise must be True or False")
 
     if matrix is not None:
         if not isinstance(matrix, str):
@@ -693,6 +761,12 @@ def _validate_user_parameters(
     if not deinterlace and deinterlace_rate_normalized != "same":
         raise ValueError(
             'cnr2_bm3d: deinterlace_rate="double" requires deinterlace=True'
+        )
+
+    deinterlace_quality_normalized = _normalize_deinterlace_quality(deinterlace_quality)
+    if not deinterlace and deinterlace_quality_normalized != "standard":
+        raise ValueError(
+            'cnr2_bm3d: deinterlace_quality="enhanced" requires deinterlace=True'
         )
 
     if not isinstance(show_info, bool):
@@ -819,12 +893,36 @@ def _from_444ps(clip: vs.VideoNode, info: ClipInfo) -> vs.VideoNode:
 # (operates on YUV444PS only)
 # ─────────────────────────────────────────────────────────────────────────────
 
+def _make_bwdif_edeint_clip(
+    clip: vs.VideoNode,
+    bwdif_field: int,
+) -> vs.VideoNode:
+    """
+    Create the external spatial-prediction clip used by bwdif's edeint option.
+
+    bwdif requires the edeint clip to match the input clip's width, height,
+    and colorspace.  For same-rate bwdif output, the edeint clip must have
+    the same number of frames as the input.  For double-rate bwdif output, it
+    must have twice as many frames as the input.
+
+    znedi3/nnedi3 uses the same field numbering as bwdif:
+        0 = same rate, keep bottom field
+        1 = same rate, keep top field
+        2 = double rate, start with bottom field
+        3 = double rate, start with top field
+
+    Passing the same bwdif_field value to nnedi3 therefore gives bwdif an
+    edeint clip with the matching frame-rate mode and field order.
+    """
+    nnedi3 = _get_znedi3_filter()
+    return nnedi3(clip, field=bwdif_field)
+
 def _bm3d_chroma_with_optional_luma(
     clip_444ps: vs.VideoNode,
     sigma_uv: float,
     sigma_luma: float,
     radius: int,
-    full_quality: bool,
+    full_quality_denoise: bool,
 ) -> vs.VideoNode:
     """
     CBM3D chroma denoising, with optional luma denoising, on a YUV444PS clip.
@@ -845,7 +943,7 @@ def _bm3d_chroma_with_optional_luma(
         radius=radius,
         chroma=True,  # CBM3D: Y guides block-matching for U and V
     )
-    if full_quality:
+    if full_quality_denoise:
         # Second pass: Wiener filter guided by the basic estimate
         denoised = core.bm3dcpu.BM3Dv2(
             clip_444ps,
@@ -876,18 +974,19 @@ def _bm3d_chroma_with_optional_luma(
 def cnr2_bm3d(
     clip: vs.VideoNode,
     sigma_uv: float = 3.5,
-    sigma_luma: float = 0.0,        # OPTIONAL TO DENOISE LUMA, 0.0=preserve luma, >0.0=optional luma denoise
-    radius: int = 1,                # 0=spatial only, 1-9=temporal window, use 1-4
-    full_quality: bool = True,
-    # Override auto-detection if you know better:
-    matrix: Optional[str] = None,   # e.g. "470bg", "601", "709" - None = auto
-    limited: Optional[bool] = None, # True=TV range, False=PC - None = auto
-    tff: Optional[bool] = None,     # True=TFF, False=BFF - None = auto
+    sigma_luma: float = 0.0,                # OPTIONAL TO DENOISE LUMA, 0.0=preserve luma, >0.0=optional luma denoise
+    radius: int = 1,                        # 0=spatial only, 1-9=temporal window, use 1-4
+    full_quality_denoise: bool = True,      # Run two BM3Dv2 passes (Wiener refinement) for high quality whihc is Slower
+    # Override auto-detection ONLY if you know better:
+    matrix: Optional[str] = None,           # e.g. "470bg", "601", "709" - None = auto
+    limited: Optional[bool] = None,         # True=TV range, False=PC - None = auto
+    tff: Optional[bool] = None,             # True=TFF, False=BFF - None = auto
     # Deinterlace after processing?
-    deinterlace: bool = False,      # requires vapoursynth-bwdif
-    deinterlace_rate: str = "same", # eg "same"=25i->25p, "double"=25i->50p
+    deinterlace: bool = False,              # requires vapoursynth-bwdif
+    deinterlace_rate: str = "same",         # eg "same"=25i->25p, "double"=25i->50p
+    deinterlace_quality: str = "standard",  # # "standard"=bwdif, "enhanced"=bwdif+znedi3 via edeint
     # Debug
-    show_info: bool = False,        # print detected ClipInfo before processing
+    show_info: bool = False,                # print detected ClipInfo before processing
 ) -> vs.VideoNode:
 
     # ── Basic validation before doing anything expensive ─────────────────────────────────────────
@@ -904,15 +1003,22 @@ def cnr2_bm3d(
         sigma_uv,
         sigma_luma,
         radius,
-        full_quality,
+        full_quality_denoise,
         matrix,
         limited,
         tff,
         deinterlace,
         deinterlace_rate,
+        deinterlace_quality,
         show_info,
     )
 
+    # Store canonical lower-case values so later logic does not need to care
+    # whether the caller used "same", "Same", "SAME", "enhanced", "ENHANCED",
+    # etc.
+    deinterlace_rate = _normalize_deinterlace_rate(deinterlace_rate)
+    deinterlace_quality = _normalize_deinterlace_quality(deinterlace_quality)
+    
     # Check dependencies are accessible.
     # Detection itself now relies (mostly) on vstools, and processing relies on fmtconv/bm3dcpu.
     _check_dependencies(deinterlace)
@@ -953,7 +1059,7 @@ def cnr2_bm3d(
             sigma_uv,
             sigma_luma,
             radius,
-            full_quality,
+            full_quality_denoise,
         )
         progressive_out = _from_444ps(denoised, info)
         # The progressive input path always returns progressive output.
@@ -987,7 +1093,7 @@ def cnr2_bm3d(
             sigma_uv,
             sigma_luma,
             radius,
-            full_quality,
+            full_quality_denoise,
         )
         return _from_444ps(f_den, info)
     top_den = _denoise_fields(top)
@@ -1007,24 +1113,42 @@ def cnr2_bm3d(
         )
 
     # ── Optional bwdif deinterlace ────────────────────────────────────────────
-    # field=1 -> keep top field -> same-rate progressive output for TFF source
-    # field=0 -> keep bottom field -> same-rate progressive output for BFF source
-    # field=2 -> output both fields -> double-rate progressive output
+    # bwdif field values:
+    #   field=0 -> same-rate progressive output, keep bottom field
+    #   field=1 -> same-rate progressive output, keep top field
+    #   field=2 -> double-rate progressive output, start with bottom field
+    #   field=3 -> double-rate progressive output, start with top field
+    #
+    # znedi3/nnedi3 uses the same field numbering, which lets the enhanced
+    # edeint clip use the same field value chosen for bwdif.
     if deinterlace_rate == "double":
-        # field=2 tells bwdif to output both fields, producing double-rate
-        # progressive output, e.g. 25i -> 50p or 29.97i -> 59.94p.
-        bwdif_field = 2
+        if _tff:
+            # TFF double-rate output should start with the top field.
+            bwdif_field = 3
+        else:
+            # BFF double-rate output should start with the bottom field.
+            bwdif_field = 2
     elif _tff:
-        # field=1 keeps the top field, producing same-rate progressive output
-        # from a top-field-first source, e.g. 25i -> 25p.
+        # Same-rate output from a top-field-first source keeps the top field.
         bwdif_field = 1
     else:
-        # field=0 keeps the bottom field, producing same-rate progressive
-        # output from a bottom-field-first source, e.g. 25i -> 25p.
+        # Same-rate output from a bottom-field-first source keeps the bottom field.
         bwdif_field = 0
-    progressive_out = core.bwdif.BwDif(interlaced_out, field=bwdif_field)
+    bwdif_filter = _get_bwdif_filter()
+    if deinterlace_quality == "enhanced":
+        # Enhanced mode keeps bwdif's motion-adaptive logic, but supplies a
+        # znedi3/nnedi3-generated edeint clip for higher-quality spatial
+        # predictions instead of bwdif's normal cubic interpolation.
+        edeint_clip = _make_bwdif_edeint_clip(interlaced_out, bwdif_field)
+        progressive_out = bwdif_filter(
+            interlaced_out,
+            field=bwdif_field,
+            edeint=edeint_clip,
+        )
+    else:
+        # Standard mode uses plain bwdif.
+        progressive_out = bwdif_filter(interlaced_out, field=bwdif_field)
+    #
     # bwdif has produced progressive output here.  Final frame props must
     # mark this as progressive, regardless of the input field order.
     return _set_output_props(progressive_out, info, field_based=0)
-
-
