@@ -823,6 +823,8 @@ def cnr2_bm3d(
     _check_dependencies(deinterlace)
     
     # grab the normalised deinterlace rate specified parameter
+    # Store the canonical lower-case value so later logic does not need to
+    # care whether the caller used "same", "Same", "SAME", etc.
     deinterlace_rate = _normalize_deinterlace_rate(deinterlace_rate)
 
     # ── Detect everything in one call ─────────────────────────────────────────
