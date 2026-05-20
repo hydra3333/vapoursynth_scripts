@@ -1,0 +1,47 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "vscnr2-bm3d"
+version = "0.1.0"
+description = "VapourSynth CNR2-replacement chroma denoising replacement using bm3dcpu, with optional luma denoising and bwdif deinterlacing."
+readme = "README.md"
+requires-python = ">=3.14"
+license = { text = "MIT" }
+authors = [
+    { name = "David Walsh" }
+]
+keywords = [
+    "vapoursynth",
+    "cnr2",
+    "vhs",
+    "chroma",
+    "denoise",
+    "bm3d",
+    "bwdif",
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: End Users/Desktop",
+    "Topic :: Multimedia :: Video",
+    "Topic :: Multimedia :: Video :: Conversion",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.14",
+    "Operating System :: Microsoft :: Windows",
+]
+
+dependencies = [
+    "vsjetpack",
+    "vapoursynth-fmtconv",
+    "vapoursynth-bm3dcpu",
+    "vapoursynth-bwdif",
+]
+
+[project.urls]
+Homepage = "https://github.com/hydra3333/vapoursynth_scripts"
+Repository = "https://github.com/hydra3333/vapoursynth_scripts"
+Source = "https://github.com/hydra3333/vapoursynth_scripts/tree/main/vscnr2_bm3d"
+
+[tool.setuptools]
+packages = ["vscnr2_bm3d"]
