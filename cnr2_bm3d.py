@@ -587,6 +587,41 @@ def _validate_user_parameters(
 # Format conversion helpers
 # ─────────────────────────────────────────────────────────────────────────────
 
+def _fmtconv_css_from_format(fmt: vs.VideoFormat) -> str:
+    """
+    Convert a VapourSynth VideoFormat's chroma subsampling shifts into the
+    css string expected by fmtconv.
+
+    fmtconv uses strings such as:
+        "444" = no chroma subsampling
+        "422" = horizontal chroma subsampling only
+        "420" = horizontal and vertical chroma subsampling
+        "411" = stronger horizontal chroma subsampling
+
+    VapourSynth stores subsampling as binary shifts:
+        subsampling_w = horizontal chroma shift
+        subsampling_h = vertical chroma shift
+
+    Keep this as an explicit mapping rather than deriving the string with a
+    formula.  It is clearer for maintainers and avoids invalid css strings
+    such as "22" for 4:2:0.
+    """
+    _map = {
+        (0, 0): "444",
+        (1, 0): "422",
+        (1, 1): "420",
+        (2, 0): "411",
+        (0, 1): "440",
+    }
+    key = (fmt.subsampling_w, fmt.subsampling_h)
+    if key not in _map:
+        raise ValueError(
+            "cnr2_bm3d: unsupported chroma subsampling for fmtconv output "
+            f"conversion: subsampling_w={fmt.subsampling_w}, "
+            f"subsampling_h={fmt.subsampling_h}"
+        )
+    return _map[key]
+
 def _to_444ps(clip: vs.VideoNode, info: ClipInfo) -> vs.VideoNode:
     """
     Convert any YUV integer clip -> YUV444PS for BM3D.
@@ -599,6 +634,8 @@ def _to_444ps(clip: vs.VideoNode, info: ClipInfo) -> vs.VideoNode:
     chroma placement adjustments are needed.
     """
     fmt = clip.format
+    if fmt is None:
+        raise ValueError("_to_444ps: clip must have a constant (non-variable) format")
     # Step 1: chroma upsampling to 4:4:4 (integer, same bit depth)
     if fmt.subsampling_w > 0 or fmt.subsampling_h > 0:
         clip = core.fmtc.resample(
@@ -624,6 +661,13 @@ def _from_444ps(clip: vs.VideoNode, info: ClipInfo) -> vs.VideoNode:
     using the same ClipInfo that drove _to_444ps.
     """
     fmt_target = core.get_video_format(info._fmt_id)
+
+    if fmt_target is None:
+        raise ValueError(
+            "_from_444ps: original clip format id is not available from "
+            "VapourSynth core.get_video_format()"
+        )
+
     # Step 1: float -> target bit depth with range re-encoding
     clip = core.fmtc.bitdepth(
         clip,
@@ -636,7 +680,7 @@ def _from_444ps(clip: vs.VideoNode, info: ClipInfo) -> vs.VideoNode:
     if fmt_target.subsampling_w > 0 or fmt_target.subsampling_h > 0:
         clip = core.fmtc.resample(
             clip,
-            css=f"{1 << fmt_target.subsampling_w}{1 << fmt_target.subsampling_h}",
+            css=_fmtconv_css_from_format(fmt_target),
             kernel="bicubic", a1=0, a2=0.5,
             fulls=not info.limited,
             fulld=not info.limited,
