@@ -9,7 +9,7 @@ Main Function:
     def cnr2_bm3d(
         clip: vs.VideoNode,
         sigma_uv: float = 3.5,
-        radius: int = 1,
+        radius: int = 1,                # 0=spatial only, 1-9=temporal window, use 1-4
         full_quality: bool = True,
         # Override auto-detection if you know better:
         matrix: Optional[str] = None,   # e.g. "470bg", "601", "709" - None = auto
@@ -25,6 +25,9 @@ Main Function:
         clip:         Input YUV clip. Any bit depth and subsampling.
         sigma_uv:     Chroma denoising strength. ~3.5 ≈ CNR2 defaults.
         radius:       Temporal radius. 0=spatial only, 1=temporal (default).
+                      This wrapper allows 0..9, pragmatically use 1-4 only.
+                      For old VHS chroma denoising, radius 1 and 2 are likely the
+                      practical values with 3 and 4 as safety headroom.
                       With field-split interlaced, each unit of radius spans
                       one same-parity field = one full interlaced frame.
         full_quality: Run two BM3Dv2 passes (Wiener refinement). Slower
@@ -553,6 +556,12 @@ def _validate_user_parameters(
         raise TypeError("cnr2_bm3d: radius must be an integer")
     if radius < 0:
         raise ValueError("cnr2_bm3d: radius must be >= 0")
+    if radius > 4:
+        raise ValueError(
+            "cnr2_bm3d: radius must be <= 9.  Larger values are not allowed "
+            "by this wrapper because BM3D memory use and processing cost grow "
+            "with the temporal window size. Use 0 to 4 (note: 0=spatial only)"
+        )
 
     if not isinstance(full_quality, bool):
         raise TypeError("cnr2_bm3d: full_quality must be True or False")
@@ -737,7 +746,7 @@ def _bm3d_chroma(
 def cnr2_bm3d(
     clip: vs.VideoNode,
     sigma_uv: float = 3.5,
-    radius: int = 1,
+    radius: int = 1,                # 0=spatial only, 1-9=temporal window, use 1-4
     full_quality: bool = True,
     # Override auto-detection if you know better:
     matrix: Optional[str] = None,   # e.g. "470bg", "601", "709" - None = auto
