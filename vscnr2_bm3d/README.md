@@ -7,6 +7,74 @@ Replacement for Vapoursynth CNR2 chroma denoising, using bm3dcpu for chroma deno
     - Use bm3dcpu for denoising    
     - Use bwdif for optional deinterlacing and furthermore optional doubling of output framerate    
 
+***************************************************************************************************
+CRITICAL NOTES - READ THIS BEFORE CONTINUING
+--------------------------------------------
+VHS capture files often have missing, incomplete, incorrect, or ambiguous
+metadata.  This is especially common with AVI captures, lossless captures,
+DVD/VOB/MPEG sources, and files produced by older capture workflows.
+
+For this script cnr2_bm3d, the most critical source properties are:
+    - whether the source is progressive or interlaced
+    - if interlaced, whether it is top-field-first (TFF) or bottom-field-first (BFF)
+    - whether the source is actually telecine / 2:3 pulldown rather than normal interlaced video
+    - colour matrix, range, primaries, transfer, chroma location, and aspect ratio signalling
+
+Wrong metadata (clip properties) will almost certainly produce wrong output.
+
+In particular, deinterlacing with the wrong field order can damage motion,
+create judder, or produce visually incorrect output.  Telecine / 2:3 pulldown
+material should instead be handled with inverse telecine / field matching,
+not with denoising/deinterlacing here.
+
+1. Recommended safe workflow:
+-----------------------------
+    precheck_metadata = cnr2_bm3d_precheck_video_file(source_filename)
+    clip = open_the_source_with_your_preferred_source_filter_eg_bestsource(source_filename)
+    clip = cnr2_bm3d(clip, precheck_metadata=precheck_metadata, ... )
+
+The precheck step inspects the original video file metadata before the source
+filter turns it into a VapourSynth clip.
+
+If the source is interlaced but the precheck cannot determine whether it is
+TFF or BFF, then processing will fail deliberately.  This is intentional.
+Guessing field order is unsafe.
+
+To continue, inspect the source, determine the correct field order, then pass
+one of these overrides in the call to cnr2_bm3d():
+    tff=True     # top-field-first
+    tff=False    # bottom-field-first
+
+2. Less Safe workflow:
+----------------------
+If precheck_metadata is not supplied eg:
+    clip = open_the_source_with_your_preferred_source_filter_eg_bestsource(source_filename)
+    do_some_stuff()
+    clip = cnr2_bm3d(clip, precheck_metadata=None, ... )
+
+then the input clip itself IS REQUIRED have correct VapourSynth frame
+properties set, either because the source filter set them correctly or because
+you the caller explicitly set them BEFORE calling cnr2_bm3d().
+
+At minimum, the following frame properties MUST be correct where applicable:
+    _FieldBased       0 = progressive, 1 = BFF interlaced, 2 = TFF interlaced
+    _Matrix           colour matrix
+    _Range            0 = limited/TV range, 1 = full/PC range
+    _Primaries        colour primaries
+    _Transfer         transfer characteristics
+    _ChromaLocation   chroma sample location, especially for 4:2:0 sources
+    _SARNum           sample aspect ratio numerator
+    _SARDen           sample aspect ratio denominator
+
+For interlaced sources, _FieldBased is especially important.  If the clip is
+interlaced but _FieldBased is missing or wrong, then specify either
+tff=True or tff=False explicitly in the call to cnr2_bm3d().
+
+If parameter deinterlace=True is requested and the script cannot determine a safe
+field order from either precheck_metadata, frame properties, or an explicit tff
+override, it will raise an error rather than guessing.
+***************************************************************************************************
+
 Main Function:
     def cnr2_bm3d(
         clip: vs.VideoNode,
