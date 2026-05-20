@@ -356,6 +356,56 @@ def _detect_format(clip: vs.VideoNode) -> ClipInfo:
 # Output frame property helpers
 # ─────────────────────────────────────────────────────────────────────────────
 
+def _normalize_matrix_str(matrix: str) -> str:
+    """
+    Normalize user-supplied or internally detected matrix names to the small
+    canonical string set used throughout this script.
+
+    Accepted examples:
+        "709", "bt709", "BT.709"
+        "470bg", "bt470bg", "BT.470BG"
+        "601", "bt601", "BT.601"
+        "170m", "st170m", "smpte170m", "SMPTE ST 170m"
+        "240m", "st240m", "smpte240m", "SMPTE ST 240m"
+        "2020ncl", "bt2020ncl", "BT.2020NCL"
+
+    Returning one canonical spelling avoids subtle mismatches between:
+        - user override validation
+        - fmtconv/resize matrix strings
+        - output _Matrix frame-property values
+
+    Internally, NTSC SD aliases such as 170m/ST170M are canonicalized to
+    "601" only as this script's short user-facing spelling.  The final output
+    frame prop is still written as VapourSynth _Matrix value 6, so the output
+    keeps the correct NTSC SD / ST170M matrix signalling.
+    """
+    key = (
+        matrix.lower()
+        .replace("smpte", "")
+        .replace("st", "")
+        .replace("bt", "")
+        .replace(".", "")
+        .replace("_", "")
+        .replace("-", "")
+        .replace(" ", "")
+    )
+    _map = {
+        "709":     "709",
+        "fcc":     "fcc",
+        "470bg":   "470bg",
+        "601":     "601",
+        "170m":    "601",
+        "240m":    "240m",
+        "2020ncl": "2020ncl",
+        "2020cl":  "2020cl",
+    }
+    if key not in _map:
+        raise ValueError(
+            "cnr2_bm3d: matrix must be one of: "
+            "709, fcc, 470bg, 601/170m, 240m, 2020ncl, 2020cl"
+        )
+    return _map[key]
+
 def _matrix_str_to_prop_value(matrix: str) -> int:
     """
     Convert the internal matrix string used by this script into the integer
@@ -374,9 +424,7 @@ def _matrix_str_to_prop_value(matrix: str) -> int:
         "2020ncl": 9,
         "2020cl":  10,
     }
-
-    key = matrix.lower().replace("bt", "").replace(".", "").replace("_", "")
-    return _map.get(key, 5)
+    return _map[_normalize_matrix_str(matrix)]
 
 def _set_output_props(
     clip: vs.VideoNode,
@@ -471,6 +519,69 @@ def _check_dependencies(deinterlace: bool) -> None:
                 "cnr2_bm3d: bwdif plugin is loaded, but "
                 "core.bwdif.BwDif is unavailable."
             )
+
+# ─────────────────────────────────────────────────────────────────────────────
+# User parameter validation helpers
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _validate_user_parameters(
+    clip: vs.VideoNode,
+    sigma_uv: float,
+    radius: int,
+    full_quality: bool,
+    matrix: Optional[str],
+    limited: Optional[bool],
+    tff: Optional[bool],
+    deinterlace: bool,
+    show_info: bool,
+) -> None:
+    """
+    Validate user-supplied parameters before format detection or expensive
+    processing starts.
+
+    This function deliberately rejects VFR/unknown-framerate clips.
+    The temporal denoising path relies on frame-to-frame adjacency having a
+    predictable meaning, and the interlaced path relies on field operations
+    that are only sensible with stable clip timing.
+    """
+    if not isinstance(sigma_uv, (int, float)):
+        raise TypeError("cnr2_bm3d: sigma_uv must be a number")
+    if sigma_uv < 0:
+        raise ValueError("cnr2_bm3d: sigma_uv must be >= 0")
+
+    if not isinstance(radius, int):
+        raise TypeError("cnr2_bm3d: radius must be an integer")
+    if radius < 0:
+        raise ValueError("cnr2_bm3d: radius must be >= 0")
+
+    if not isinstance(full_quality, bool):
+        raise TypeError("cnr2_bm3d: full_quality must be True or False")
+
+    if matrix is not None:
+        if not isinstance(matrix, str):
+            raise TypeError("cnr2_bm3d: matrix must be a string or None")
+        # Normalize once here to validate supported spellings.  The canonical
+        # value is applied later when manual overrides are copied into ClipInfo.
+        _normalize_matrix_str(matrix)
+
+    if limited is not None and not isinstance(limited, bool):
+        raise TypeError("cnr2_bm3d: limited must be True, False, or None")
+
+    if tff is not None and not isinstance(tff, bool):
+        raise TypeError("cnr2_bm3d: tff must be True, False, or None")
+
+    if not isinstance(deinterlace, bool):
+        raise TypeError("cnr2_bm3d: deinterlace must be True or False")
+
+    if not isinstance(show_info, bool):
+        raise TypeError("cnr2_bm3d: show_info must be True or False")
+
+    if clip.fps_num == 0 or clip.fps_den == 0:
+        raise ValueError(
+            "cnr2_bm3d: variable-framerate or unknown-framerate clips are "
+            "not supported. Convert the source to a constant-framerate clip "
+            "before calling cnr2_bm3d."
+        )
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Format conversion helpers
@@ -594,19 +705,35 @@ def cnr2_bm3d(
     show_info: bool = False,        # print detected ClipInfo before processing
 ) -> vs.VideoNode:
 
-    # Perform some basic checks before doing anything
+    # ── Basic validation before doing anything expensive ─────────────────────────────────────────
+
+    # Perform some basic clip checks
     if clip.format is None:
         raise ValueError("cnr2_bm3d: clip must have a constant (non-variable) format")
     if clip.format.color_family != vs.YUV:
         raise ValueError("cnr2_bm3d: input must be a YUV clip")
-    # Check dependencies before detection or expensive processing.
+
+    # Validate the calling parameters to ensure we can successfully do what is asked
+    _validate_user_parameters(
+        clip,
+        sigma_uv,
+        radius,
+        full_quality,
+        matrix,
+        limited,
+        tff,
+        deinterlace,
+        show_info,
+    )
+
+    # Check dependencies are accessible.
     # Detection itself now relies (mostly) on vstools, and processing relies on fmtconv/bm3dcpu.
     _check_dependencies(deinterlace)
 
     # ── Detect everything in one call ─────────────────────────────────────────
     info = _detect_format(clip)
     # Apply manual overrides
-    if matrix  is not None: info.matrix        = matrix
+    if matrix  is not None: info.matrix        = _normalize_matrix_str(matrix)
     if limited is not None: info.limited       = limited
     if tff     is not None:
         info.tff           = tff
