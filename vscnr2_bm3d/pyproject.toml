@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "vscnr2-bm3d"
-version = "0.1.0"
+version = "0.1.1"
 description = "VapourSynth CNR2 replacement for chroma denoising using bm3dcpu, with optional luma denoising and bwdif deinterlacing."
 readme = "README.md"
 requires-python = ">=3.13"
