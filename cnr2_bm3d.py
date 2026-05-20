@@ -9,7 +9,8 @@ Main Function:
     def cnr2_bm3d(
         clip: vs.VideoNode,
         sigma_uv: float = 3.5,
-        radius: int = 1,                # 0=spatial only, 1-9=temporal window, use 1-4
+        sigma_luma: float = 0.0,        # OPTIONAL TO DENOISE LUMA, 0.0=preserve luma, >0.0=optional luma denoise
+        radius: int = 1,                # 0=spatial only, 1-9=temporal window
         full_quality: bool = True,
         # Override auto-detection if you know better:
         matrix: Optional[str] = None,   # e.g. "470bg", "601", "709" - None = auto
@@ -25,7 +26,17 @@ Main Function:
     Args:
         clip:         Input YUV clip. Any bit depth and subsampling.
         sigma_uv:     Chroma denoising strength. ~3.5 ≈ CNR2 defaults.
-        radius:       Temporal radius. 0=spatial only, 1=temporal (default).
+        sigma_luma:   Optional LUMA denoising strength.
+                      0.0 preserves LUMA from the source clip, matching the
+                      original chroma-only CNR2 behaviour.
+                      Use LUMA denoising cautiously because it is much more
+                      visually obvious than chroma denoising.
+                      Suggested starting values:
+                          0.0 = preserve LUMA exactly
+                          0.5 = very light LUMA denoise
+                          1.0 = light LUMA denoise
+                          2.0 = moderate LUMA denoise; use cautiously
+        radius:       Temporal radius. 0=spatial only, 1+=temporal (default).
                       This wrapper allows 0..9, pragmatically use 1-4 only.
                       For old VHS chroma denoising, radius 1 and 2 are likely the
                       practical values with 3 and 4 as safety headroom.
@@ -83,7 +94,8 @@ Usage examples: - PAL VHS 720x576 25i YUV420P8
 
 3. Then, your own concoction based on these examples:
 
-## LIGHT chroma denoise - interlaced output, gentle chroma clean-up, single BM3D pass
+## LIGHT chroma-only denoise
+## interlaced output, gentle chroma clean-up, single BM3D pass
 light = cnr2_bm3d(
     clip,
     sigma_uv=1.5,
@@ -93,7 +105,20 @@ light = cnr2_bm3d(
     show_info=True,      # print detected properties on first call for verification
 )
 
-## MEDIUM - approximately CNR2 defaults, deliver progressive output via bwdif
+## LIGHT chroma with light OPTIONAL LUMA DENOISE AS WELL
+## interlaced output, gentle chroma clean-up, single BM3D pass
+light = cnr2_bm3d(
+    clip,
+    sigma_uv=1.5,
+    sigma_luma=0.5,      # do optional light LUMA denoising as well
+    radius=1,
+    full_quality=False,
+    deinterlace=False,   # stay interlaced; deinterlace downstream in your own pipeline if you need
+    show_info=True,      # print detected properties on first call for verification
+)
+
+## MEDIUM - approximately CNR2 defaults
+## deliver progressive output via bwdif
 medium = cnr2_bm3d(
     clip,
     sigma_uv=3.5,
@@ -103,10 +128,37 @@ medium = cnr2_bm3d(
     deinterlace_rate="same",
 )
 
-## HEAVY - badly degraded tape, wider temporal window, deliver progressive output via bwdif
+## MEDIUM - approximately CNR2 chroma defaults
+## with medium OPTIONAL LUMA DENOISE AS WELL
+## deliver progressive output via bwdif
+medium = cnr2_bm3d(
+    clip,
+    sigma_uv=3.5,
+    sigma_luma=1.0,      # do optional medium LUMA denoising as well
+    radius=1,
+    full_quality=True,
+    deinterlace=True,
+    deinterlace_rate="same",
+)
+
+## HEAVY - badly degraded VHS tape, wider temporal window
+## deliver progressive output via bwdif
 heavy = cnr2_bm3d(
     clip,
     sigma_uv=8.0,
+    radius=2,             # 5 same-parity fields per output field (~200ms context)
+    full_quality=True,
+    deinterlace=True,
+    deinterlace_rate="double",
+)
+
+## HEAVY - badly degraded VHS tape, wider temporal window
+## with heavy OPTIONAL LUMA DENOISE AS WELL
+## deliver progressive output via bwdif
+heavy = cnr2_bm3d(
+    clip,
+    sigma_uv=8.0,
+    sigma_luma=2.0,       # do optional heavy LUMA denoising as well
     radius=2,             # 5 same-parity fields per output field (~200ms context)
     full_quality=True,
     deinterlace=True,
@@ -552,6 +604,7 @@ def _normalize_deinterlace_rate(deinterlace_rate: str) -> str:
 def _validate_user_parameters(
     clip: vs.VideoNode,
     sigma_uv: float,
+    sigma_luma: float,
     radius: int,
     full_quality: bool,
     matrix: Optional[str],
@@ -576,6 +629,14 @@ def _validate_user_parameters(
         raise ValueError(
             "cnr2_bm3d: sigma_uv must be in the range 0..50. "
             "Values above 50 are likely accidental and can cause extreme chroma damage."
+        )
+
+    if isinstance(sigma_luma, bool) or not isinstance(sigma_luma, (int, float)):
+        raise TypeError("cnr2_bm3d: sigma_luma must be a number")
+    if (sigma_luma < 0) or (sigma_luma > 50):
+        raise ValueError(
+            "cnr2_bm3d: sigma_luma must be in the range 0..50. "
+            "Values above 20 are likely accidental and can cause extreme luma damage."
         )
 
     if isinstance(radius, bool) or not isinstance(radius, int):
@@ -737,19 +798,26 @@ def _from_444ps(clip: vs.VideoNode, info: ClipInfo) -> vs.VideoNode:
 # Core BM3D chroma denoising (operates on YUV444PS only)
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _bm3d_chroma(
+def _bm3d_chroma_with_optional_luma(
     clip_444ps: vs.VideoNode,
     sigma_uv: float,
+    sigma_luma: float,
     radius: int,
     full_quality: bool,
 ) -> vs.VideoNode:
     """
-    CBM3D chroma denoising on a YUV444PS clip.
-    sigma[0]=0 -> luma is never denoised, only used to guide U/V block-matching.
+    CBM3D chroma denoising, with optional luma denoising, on a YUV444PS clip.
+
+    sigma_luma=0.0 preserves luma from the source clip after BM3D processing.
+    That keeps the default behaviour as a chroma-only CNR2.
+
+    sigma_luma>0.0 enables OPTIONAL luma denoising as well as chroma denoising.
+    Use this CAUTIOUSLY because luma denoising is much more visually obvious
+    than chroma denoising.
 
     BM3Dv2 handles temporal aggregation internally - no VAggregate call needed.
     """
-    sigma = [0.0, sigma_uv, sigma_uv]
+    sigma = [sigma_luma, sigma_uv, sigma_uv]
     basic = core.bm3dcpu.BM3Dv2(
         clip_444ps,
         sigma=sigma,
@@ -767,14 +835,18 @@ def _bm3d_chroma(
         )
     else:
         denoised = basic
-    # Restore luma from the original float clip - sigma[0]=0 means luma in
-    # `denoised` is mathematically a no-op, but pulling directly from source
-    # avoids any float accumulation artefact on the luma plane.
-    return core.std.ShufflePlanes(
-        [clip_444ps, denoised, denoised],
-        planes=[0, 1, 2],
-        colorfamily=vs.YUV,
-    )
+
+    if sigma_luma == 0.0:
+        # Restore luma from the original float clip.  Even when BM3D is asked
+        # not to denoise luma, pulling the luma plane directly from the source
+        # avoids any possible float accumulation artefact on the luma plane.
+        return core.std.ShufflePlanes(
+            [clip_444ps, denoised, denoised],
+            planes=[0, 1, 2],
+            colorfamily=vs.YUV,
+        )
+    # Optional luma denoising was requested, so also return BM3D's denoised luma plane.
+    return denoised
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Main function:  CNR2 replacement using bm3dcpu CBM3D chroma denoising.
@@ -783,6 +855,7 @@ def _bm3d_chroma(
 def cnr2_bm3d(
     clip: vs.VideoNode,
     sigma_uv: float = 3.5,
+    sigma_luma: float = 0.0,        # OPTIONAL TO DENOISE LUMA, 0.0=preserve luma, >0.0=optional luma denoise
     radius: int = 1,                # 0=spatial only, 1-9=temporal window, use 1-4
     full_quality: bool = True,
     # Override auto-detection if you know better:
@@ -808,6 +881,7 @@ def cnr2_bm3d(
     _validate_user_parameters(
         clip,
         sigma_uv,
+        sigma_luma,
         radius,
         full_quality,
         matrix,
@@ -853,8 +927,14 @@ def cnr2_bm3d(
     # ── Progressive Input path ──────────────────────────────────────────────────────
     if not info.is_interlaced:
         clip_f   = _to_444ps(clip, info)
-        denoised = _bm3d_chroma(clip_f, sigma_uv, radius, full_quality)
-        progressive_out   = _from_444ps(denoised, info)
+        denoised = _bm3d_chroma_with_optional_luma(
+            clip_f,
+            sigma_uv,
+            sigma_luma,
+            radius,
+            full_quality,
+        )
+        progressive_out = _from_444ps(denoised, info)
         # The progressive input path always returns progressive output.
         return _set_output_props(progressive_out, info, field_based=0)
 
@@ -876,8 +956,18 @@ def cnr2_bm3d(
     def _denoise_fields(f: vs.VideoNode) -> vs.VideoNode:
         # SeparateFields clips are progressive 720x288 - use same info but
         # the format detection still holds (same format, matrix, range).
+        # Optional luma denoising is safe here because each stream contains
+        # only one field parity.  BM3D temporal comparisons therefore happen
+        # between same-parity fields rather than between mismatched interlaced
+        # field lines.
         f_444 = _to_444ps(f, info)
-        f_den = _bm3d_chroma(f_444, sigma_uv, radius, full_quality)
+        f_den = _bm3d_chroma_with_optional_luma(
+            f_444,
+            sigma_uv,
+            sigma_luma,
+            radius,
+            full_quality,
+        )
         return _from_444ps(f_den, info)
     top_den = _denoise_fields(top)
     bot_den = _denoise_fields(bot)
