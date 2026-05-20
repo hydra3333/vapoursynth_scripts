@@ -17,6 +17,7 @@ Main Function:
         tff: Optional[bool] = None,     # True=TFF, False=BFF - None = auto
         # Deinterlace after processing?
         deinterlace: bool = False,      # requires vapoursynth-bwdif
+        deinterlace_rate: str = "same", # eg "same"=25i->25p, "double"=25i->50p
         # Debug
         show_info: bool = False,        # print detected ClipInfo before processing
     ) -> vs.VideoNode:
@@ -521,6 +522,25 @@ def _check_dependencies(deinterlace: bool) -> None:
 # User parameter validation helpers
 # ─────────────────────────────────────────────────────────────────────────────
 
+def _normalize_deinterlace_rate(deinterlace_rate: str) -> str:
+    """
+    Normalize the requested deinterlace output rate.
+
+    Accepted values:
+        "same"   = same-rate deinterlacing, e.g. 25i -> 25p
+        "double" = double-rate/bob deinterlacing, e.g. 25i -> 50p
+
+    Case is ignored so user input such as "Same", "SAME", "Double", and
+    "DOUBLE" is accepted, but the rest of the script only sees the canonical
+    lower-case values.
+    """
+    if not isinstance(deinterlace_rate, str):
+        raise TypeError('cnr2_bm3d: deinterlace_rate must be "same" or "double"')
+    rate = deinterlace_rate.strip().lower()
+    if rate not in {"same", "double"}:
+        raise ValueError('cnr2_bm3d: deinterlace_rate must be "same" or "double"')
+    return rate
+
 def _validate_user_parameters(
     clip: vs.VideoNode,
     sigma_uv: float,
@@ -530,6 +550,7 @@ def _validate_user_parameters(
     limited: Optional[bool],
     tff: Optional[bool],
     deinterlace: bool,
+    deinterlace_rate[str],
     show_info: bool,
 ) -> None:
     """
@@ -578,6 +599,12 @@ def _validate_user_parameters(
 
     if not isinstance(deinterlace, bool):
         raise TypeError("cnr2_bm3d: deinterlace must be True or False")
+
+    deinterlace_rate_normalized = _normalize_deinterlace_rate(deinterlace_rate)
+    if not deinterlace and deinterlace_rate_normalized != "same":
+        raise ValueError(
+            'cnr2_bm3d: deinterlace_rate="double" requires deinterlace=True'
+        )
 
     if not isinstance(show_info, bool):
         raise TypeError("cnr2_bm3d: show_info must be True or False")
@@ -756,6 +783,7 @@ def cnr2_bm3d(
     tff: Optional[bool] = None,     # True=TFF, False=BFF - None = auto
     # Deinterlace after processing?
     deinterlace: bool = False,      # requires vapoursynth-bwdif
+    deinterlace_rate: str = "same", # eg "same"=25i->25p, "double"=25i->50p
     # Debug
     show_info: bool = False,        # print detected ClipInfo before processing
 ) -> vs.VideoNode:
@@ -778,12 +806,16 @@ def cnr2_bm3d(
         limited,
         tff,
         deinterlace,
+        deinterlace_rate,
         show_info,
     )
 
     # Check dependencies are accessible.
     # Detection itself now relies (mostly) on vstools, and processing relies on fmtconv/bm3dcpu.
     _check_dependencies(deinterlace)
+    
+    # grab the normalised deinterlace rate specified parameter
+    deinterlace_rate = _normalize_deinterlace_rate(deinterlace_rate)
 
     # ── Detect everything in one call ─────────────────────────────────────────
     info = _detect_format(clip)
@@ -854,11 +886,21 @@ def cnr2_bm3d(
         )
 
     # ── Optional bwdif deinterlace ────────────────────────────────────────────
-    #
-    # field=1 -> keep top field -> 25fps progressive (TFF source)
-    # field=0 -> keep bottom field -> 25fps progressive (BFF source)
-    # field=2 -> output both fields -> 50fps progressive
-    bwdif_field = 1 if _tff else 0
+    # field=1 -> keep top field -> same-rate progressive output for TFF source
+    # field=0 -> keep bottom field -> same-rate progressive output for BFF source
+    # field=2 -> output both fields -> double-rate progressive output
+    if deinterlace_rate == "double":
+        # field=2 tells bwdif to output both fields, producing double-rate
+        # progressive output, e.g. 25i -> 50p or 29.97i -> 59.94p.
+        bwdif_field = 2
+    elif _tff:
+        # field=1 keeps the top field, producing same-rate progressive output
+        # from a top-field-first source, e.g. 25i -> 25p.
+        bwdif_field = 1
+    else:
+        # field=0 keeps the bottom field, producing same-rate progressive
+        # output from a bottom-field-first source, e.g. 25i -> 25p.
+        bwdif_field = 0
     progressive_out = core.bwdif.BwDif(interlaced_out, field=bwdif_field)
     # bwdif has produced progressive output here.  Final frame props must
     # mark this as progressive, regardless of the input field order.
