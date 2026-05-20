@@ -4,7 +4,7 @@ Replacement for CNR2 chroma denoising, using bm3dcpu for chroma denoising and bw
     - Defaults to chroma-only denoising, with optional LUMA denoising via sigma_luma.
     - Handles both progressive and interlaced (PAL/NTSC) YUV sources.
     - For interlaced sources, fields are separated by parity (TFF/BFF), denoised independently, then rewoven before optional bwdif deinterlacing.
-    - Use bm3dcpu for dcenoising
+    - Use bm3dcpu for denoising
     - Use bwdif for optional deinterlacing and furthermore optional doubling of output framerate
 
 Main Function:
@@ -90,7 +90,7 @@ Assumptions:
 Usage examples: - PAL VHS 720x576 25i YUV420P8
 
 1. To inspect what was detected before committing to a run:
-    print(_detect_format(clip))
+    print(inspect_input_clip(clip))
 
 2. Or, pass show_info=True to cnr2_bm3d to see it inline.
 
@@ -182,6 +182,11 @@ try:
 except ImportError:
     _HAS_VSTOOLS = False
 
+# expose these functions publically
+__all__ = [
+    "cnr2_bm3d",
+    "inspect_input_clip",
+]
 
 # ─────────────────────────────────────────────────────────────────────────────
 # ClipInfo dataclass - everything detected about a clip in one place
@@ -411,6 +416,19 @@ def _detect_format(clip: vs.VideoNode) -> ClipInfo:
         tff           = tff,
         _fmt_id       = fmt.id,
     )
+
+def inspect_input_clip(clip: vs.VideoNode) -> ClipInfo:
+    """
+    Inspect an input clip and return the ClipInfo that cnr2_bm3d() would use
+    before manual overrides are applied.
+
+    This is a public diagnostic helper for checking detected or guessed input
+    properties such as matrix, range, field order, format, frame count, and
+    timing before committing to a full processing run.
+
+    This function does not process or modify the clip.
+    """
+    return _detect_format(clip)
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Output frame property helpers
