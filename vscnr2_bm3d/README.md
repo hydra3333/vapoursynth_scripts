@@ -14,21 +14,21 @@ VHS capture files often have missing, incomplete, incorrect, or ambiguous
 metadata.  This is especially common with AVI captures, lossless captures,
 DVD/VOB/MPEG sources, and files produced by older capture workflows.
 
-For this script cnr2_bm3d, the most critical source properties are:
+For cnr2_bm3d, the most critical source properties are:
     - whether the source is progressive or interlaced
     - if interlaced, whether it is top-field-first (TFF) or bottom-field-first (BFF)
     - whether the source is actually telecine / 2:3 pulldown rather than normal interlaced video
     - colour matrix, range, primaries, transfer, chroma location, and aspect ratio signalling
 
-Wrong metadata (clip properties) will almost certainly produce wrong output.
+Wrong metadata or wrong clip frame properties will almost certainly produce wrong output.
 
 In particular, deinterlacing with the wrong field order can damage motion,
 create judder, or produce visually incorrect output.  Telecine / 2:3 pulldown
 material should instead be handled with inverse telecine / field matching,
 not with denoising/deinterlacing here.
 
-1. Recommended safe workflow:
------------------------------
+1. RECOMMENDED SAFE WORKFLOW
+----------------------------
     precheck_metadata = cnr2_bm3d_precheck_video_file(source_filename)
     clip = open_the_source_with_your_preferred_source_filter_eg_bestsource(source_filename)
     clip = cnr2_bm3d(clip, precheck_metadata=precheck_metadata, ... )
@@ -36,23 +36,35 @@ not with denoising/deinterlacing here.
 The precheck step inspects the original video file metadata before the source
 filter turns it into a VapourSynth clip.
 
+If the source is interlaced and the precheck can determine field order, the
+precheck metadata will record the recommended field order:
+    recommended_tff=True     # top-field-first
+    recommended_tff=False    # bottom-field-first
+
 If the source is interlaced but the precheck cannot determine whether it is
-TFF or BFF, then processing will fail deliberately.  This is intentional.
+TFF or BFF, then the precheck will fail deliberately.  This is intentional.
 Guessing field order is unsafe.
 
 To continue, inspect the source, determine the correct field order, then pass
-one of these overrides in the call to cnr2_bm3d():
-    tff=True     # top-field-first
-    tff=False    # bottom-field-first
+the override to the precheck function:
+    precheck_metadata = cnr2_bm3d_precheck_video_file(source_filename, tff=True, ...) # for TFF
+or:
+    precheck_metadata = cnr2_bm3d_precheck_video_file(source_filename, tff=True, ...) # for BFF
 
-2. Less Safe workflow:
-----------------------
-If precheck_metadata is not supplied eg:
+Then pass the same field-order override to cnr2_bm3d():
+    clip = cnr2_bm3d(clip, precheck_metadata=precheck_metadata, tff=True, ... ) # explicit override; wins over metadata
+
+When tff is supplied directly to cnr2_bm3d(), that explicit value takes priority
+over precheck metadata and clip frame properties and fills in missing metadata.
+
+2. LESS SAFE WORKFLOW
+---------------------
+If precheck_metadata is not supplied, for example:
     clip = open_the_source_with_your_preferred_source_filter_eg_bestsource(source_filename)
-    do_some_stuff()
+    clip = do_some_stuff(clip)
     clip = cnr2_bm3d(clip, precheck_metadata=None, ... )
 
-then the input clip itself IS REQUIRED have correct VapourSynth frame
+then the input clip itself IS REQUIRED to have correct VapourSynth frame
 properties set, either because the source filter set them correctly or because
 you the caller explicitly set them BEFORE calling cnr2_bm3d().
 
@@ -67,12 +79,18 @@ At minimum, the following frame properties MUST be correct where applicable:
     _SARDen           sample aspect ratio denominator
 
 For interlaced sources, _FieldBased is especially important.  If the clip is
-interlaced but _FieldBased is missing or wrong, then specify either
-tff=True or tff=False explicitly in the call to cnr2_bm3d().
+interlaced but _FieldBased is missing or wrong, specify either tff=True or
+tff=False explicitly in the call to cnr2_bm3d().
 
-If parameter deinterlace=True is requested and the script cannot determine a safe
-field order from either precheck_metadata, frame properties, or an explicit tff
-override, it will raise an error rather than guessing.
+If deinterlace=True is requested and the script cannot determine a safe field
+order from precheck_metadata, frame properties, or an explicit tff override, it
+will raise an error rather than guessing.
+
+3. Telecine / 2:3 pulldown sources
+----------------------------------
+If the precheck detects progressive telecine / 2:3 pulldown material, bwdif
+deinterlacing is definitely not the correct operation for this clip.
+Use an inverse-telecine / field-matching workflow before calling cnr2_bm3d().
 ***************************************************************************************************
 
 Main Function:
