@@ -1,7 +1,7 @@
 """
 Replacement for CNR2 chroma denoising, using bm3dcpu for chroma denoising and bwdif for deinterlacing.
     - Intended for use with chroma-noisey VHS captures eg for VHS-C home movies.
-    - Optionally, also denoise LUMA as well (use lesser sigma)
+    - Defaults to chroma-only denoising, with optional LUMA denoising via sigma_luma.
     - Handles both progressive and interlaced (PAL/NTSC) YUV sources.
     - For interlaced sources, fields are separated by parity (TFF/BFF), denoised independently, then rewoven before optional bwdif deinterlacing.
     - Use bm3dcpu for dcenoising
@@ -918,7 +918,7 @@ def cnr2_bm3d(
     # Results of the next block will be:
     #
     # progressive input path:
-    #    final output variable = result
+    #    final output variable = progressive_out
     #    final _FieldBased = 0
     # interlaced input, deinterlace=False:
     #     final output variable = interlaced_out
