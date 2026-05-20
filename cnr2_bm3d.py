@@ -413,6 +413,66 @@ def _set_output_props(
     )
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Dependency checking helpers
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _check_dependencies(deinterlace: bool) -> None:
+    """
+    Check required Python imports and VapourSynth plugin namespaces before
+    expensive processing starts.
+
+    This function deliberately checks both plugin namespaces and the specific
+    filter functions used by this script.  In portable VapourSynth installs,
+    a package may be installed but the plugin DLL may not have autoloaded
+    correctly, so checking only Python package presence is not sufficient.
+    """
+    if not _HAS_VSTOOLS:
+        raise RuntimeError(
+            "cnr2_bm3d: missing required Python dependency vstools.\n"
+            "  Install it into this portable Python with:\n"
+            "  pip install vsjetpack"
+        )
+    if not hasattr(core, "fmtc"):
+        raise RuntimeError(
+            "cnr2_bm3d: missing required VapourSynth plugin fmtconv.\n"
+            "  Install it into this portable Python with:\n"
+            "  pip install vapoursynth-fmtconv"
+        )
+    if not hasattr(core.fmtc, "resample"):
+        raise RuntimeError(
+            "cnr2_bm3d: fmtconv plugin is loaded, but core.fmtc.resample "
+            "is unavailable."
+        )
+    if not hasattr(core.fmtc, "bitdepth"):
+        raise RuntimeError(
+            "cnr2_bm3d: fmtconv plugin is loaded, but core.fmtc.bitdepth "
+            "is unavailable."
+        )
+    if not hasattr(core, "bm3dcpu"):
+        raise RuntimeError(
+            "cnr2_bm3d: missing required VapourSynth plugin bm3dcpu.\n"
+            "  Install it into this portable Python with:\n"
+            "  pip install vapoursynth-bm3dcpu"
+        )
+    if not hasattr(core.bm3dcpu, "BM3Dv2"):
+        raise RuntimeError(
+            "cnr2_bm3d: bm3dcpu plugin is loaded, but "
+            "core.bm3dcpu.BM3Dv2 is unavailable."
+        )
+    if deinterlace:
+        if not hasattr(core, "bwdif"):
+            raise RuntimeError(
+                "cnr2_bm3d: deinterlace=True requires the bwdif plugin.\n"
+                "  Install it into this portable Python with:\n"
+                "  pip install vapoursynth-bwdif"
+            )
+        if not hasattr(core.bwdif, "BwDif"):
+            raise RuntimeError(
+                "cnr2_bm3d: bwdif plugin is loaded, but "
+                "core.bwdif.BwDif is unavailable."
+            )
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Format conversion helpers
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -534,10 +594,14 @@ def cnr2_bm3d(
     show_info: bool = False,        # print detected ClipInfo before processing
 ) -> vs.VideoNode:
 
+    # Perform some basic checks before doing anything
     if clip.format is None:
         raise ValueError("cnr2_bm3d: clip must have a constant (non-variable) format")
     if clip.format.color_family != vs.YUV:
         raise ValueError("cnr2_bm3d: input must be a YUV clip")
+    # Check dependencies before detection or expensive processing.
+    # Detection itself now relies (mostly) on vstools, and processing relies on fmtconv/bm3dcpu.
+    _check_dependencies(deinterlace)
 
     # ── Detect everything in one call ─────────────────────────────────────────
     info = _detect_format(clip)
@@ -608,11 +672,7 @@ def cnr2_bm3d(
         )
 
     # ── Optional bwdif deinterlace ────────────────────────────────────────────
-    if not hasattr(core, "bwdif"):
-        raise RuntimeError(
-            "cnr2_bm3d: deinterlace=True requires the bwdif plugin.\n"
-            "  pip install vapoursynth-bwdif "
-        )
+    #
     # field=1 -> keep top field -> 25fps progressive (TFF source)
     # field=0 -> keep bottom field -> 25fps progressive (BFF source)
     # field=2 -> output both fields -> 50fps progressive
