@@ -48,3 +48,9 @@ Source = "https://github.com/hydra3333/vapoursynth_scripts/tree/main/vscnr2_bm3d
 
 [tool.setuptools]
 packages = ["vscnr2_bm3d"]
+
+[tool.setuptools.package-dir]
+vscnr2_bm3d = "."
+
+
+
