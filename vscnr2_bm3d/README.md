@@ -3,5 +3,5 @@ Replacement for Vapoursynth CNR2 chroma denoising, using bm3dcpu for chroma deno
     - Defaults to chroma-only denoising, with optional LUMA denoising via sigma_luma.    
     - Handles both progressive and interlaced (PAL/NTSC) YUV sources.    
     - For interlaced sources, fields are separated by parity (TFF/BFF), denoised independently, then rewoven before optional bwdif deinterlacing.    
-    - Use bm3dcpu for dcenoising    
+    - Use bm3dcpu for denoising    
     - Use bwdif for optional deinterlacing and furthermore optional doubling of output framerate    
