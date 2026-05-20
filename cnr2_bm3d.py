@@ -261,17 +261,11 @@ def _detect_range(clip: vs.VideoNode) -> bool:
     # VapourSynth R74+ prefers _Range:
     #   _Range      0 = limited, 1 = full
     #
-    # Older scripts may still expose _ColorRange:
-    #   _ColorRange 0 = full,    1 = limited
-    #
-    # Do not read _ColorRange unless _Range is absent, because reading
-    # _ColorRange in newer VapourSynth versions emits a deprecation warning.
+    # Do not read deprecated _ColorRange.  Reading _ColorRange in newer
+    # VapourSynth versions can emit a deprecation warning, which is undesirable
+    # in normal vspipe-to-ffmpeg use.
     if "_Range" in f.props:
         return int(f.props["_Range"]) == 0
-
-    if "_ColorRange" in f.props:
-        return int(f.props["_ColorRange"]) != 0
-
     # Last-resort default for VHS/SD restoration work.
     return True
 
@@ -443,23 +437,23 @@ def _set_output_props(
         1 = bottom field first interlaced
         2 = top field first interlaced
 
-    Range properties:
+    Range property:
         _Range is the current VapourSynth property:
             0 = limited, 1 = full
-        _ColorRange is older/deprecated but still set for compatibility:
-            0 = full,    1 = limited
 
-    This helper intentionally sets both range properties.  It should only be
-    used at final return points, not on intermediate separated fields.
+    Deprecated _ColorRange is deliberately not written.  Avoiding it prevents
+    deprecation warnings and keeps the output aligned with current VapourSynth
+    frame-property naming.
+
+    This helper should only be used at final return points, not on intermediate
+    separated fields.
     """
     range_new = 0 if info.limited else 1
-    range_old = 1 if info.limited else 0
 
     return core.std.SetFrameProps(
         clip,
         _Matrix=_matrix_str_to_prop_value(info.matrix),
         _Range=range_new,
-        _ColorRange=range_old,
         _FieldBased=field_based,
     )
 
@@ -547,20 +541,23 @@ def _validate_user_parameters(
     predictable meaning, and the interlaced path relies on field operations
     that are only sensible with stable clip timing.
     """
-    if not isinstance(sigma_uv, (int, float)):
+    if isinstance(sigma_uv, bool) or not isinstance(sigma_uv, (int, float)):
         raise TypeError("cnr2_bm3d: sigma_uv must be a number")
-    if sigma_uv < 0:
-        raise ValueError("cnr2_bm3d: sigma_uv must be >= 0")
+    if (sigma_uv < 0) or (sigma_uv > 50):
+        raise ValueError(
+            "cnr2_bm3d: sigma_uv must be in the range 0..50. "
+            "Values above 50 are likely accidental and can cause extreme chroma damage."
+        )
 
-    if not isinstance(radius, int):
+    if isinstance(radius, bool) or not isinstance(radius, int):
         raise TypeError("cnr2_bm3d: radius must be an integer")
     if radius < 0:
         raise ValueError("cnr2_bm3d: radius must be >= 0")
     if radius > 4:
         raise ValueError(
-            "cnr2_bm3d: radius must be <= 9.  Larger values are not allowed "
+            "cnr2_bm3d: radius must be <= 4.  Larger values are not allowed "
             "by this wrapper because BM3D memory use and processing cost grow "
-            "with the temporal window size. Use 0 to 4 (note: 0=spatial only)"
+            "with the temporal window size."
         )
 
     if not isinstance(full_quality, bool):
@@ -590,6 +587,11 @@ def _validate_user_parameters(
             "cnr2_bm3d: variable-framerate or unknown-framerate clips are "
             "not supported. Convert the source to a constant-framerate clip "
             "before calling cnr2_bm3d."
+        )
+
+    if clip.num_frames <= 0:
+        raise ValueError(
+            "cnr2_bm3d: clip must have a known positive frame count"
         )
 
 # ─────────────────────────────────────────────────────────────────────────────
