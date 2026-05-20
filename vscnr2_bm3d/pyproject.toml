@@ -31,7 +31,6 @@ classifiers = [
     "Programming Language :: Python :: 3.13",
     "Programming Language :: Python :: 3.14",
     "Operating System :: Microsoft :: Windows",
-    "License :: OSI Approved :: GNU Affero General Public License v3",
 ]
 
 dependencies = [
