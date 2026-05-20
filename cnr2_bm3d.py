@@ -353,6 +353,66 @@ def _detect_format(clip: vs.VideoNode) -> ClipInfo:
     )
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Output frame property helpers
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _matrix_str_to_prop_value(matrix: str) -> int:
+    """
+    Convert the internal matrix string used by this script into the integer
+    value used by VapourSynth's _Matrix frame property.
+
+    Keep this mapping explicit rather than relying on vstools at this final
+    output-property stage.  Output properties should still be set correctly
+    even if vstools is unavailable after initial detection has completed.
+    """
+    _map = {
+        "709":     1,
+        "fcc":     4,
+        "470bg":   5,
+        "601":     6,
+        "240m":    7,
+        "2020ncl": 9,
+        "2020cl":  10,
+    }
+
+    key = matrix.lower().replace("bt", "").replace(".", "").replace("_", "")
+    return _map.get(key, 5)
+
+def _set_output_props(
+    clip: vs.VideoNode,
+    info: ClipInfo,
+    field_based: int,
+) -> vs.VideoNode:
+    """
+    Set output frame properties so downstream filters and encoders see
+    properties that describe the final output clip, not merely the input clip.
+
+    field_based must describe the final output:
+        0 = progressive
+        1 = bottom field first interlaced
+        2 = top field first interlaced
+
+    Range properties:
+        _Range is the current VapourSynth property:
+            0 = limited, 1 = full
+        _ColorRange is older/deprecated but still set for compatibility:
+            0 = full,    1 = limited
+
+    This helper intentionally sets both range properties.  It should only be
+    used at final return points, not on intermediate separated fields.
+    """
+    range_new = 0 if info.limited else 1
+    range_old = 1 if info.limited else 0
+
+    return core.std.SetFrameProps(
+        clip,
+        _Matrix=_matrix_str_to_prop_value(info.matrix),
+        _Range=range_new,
+        _ColorRange=range_old,
+        _FieldBased=field_based,
+    )
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Format conversion helpers
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -489,13 +549,26 @@ def cnr2_bm3d(
         info.is_interlaced = True
     if show_info:
         print(info)
-
+    #
+    # Results of the next block will be:
+    #
+    # progressive input path:
+    #    final output variable = result
+    #    final _FieldBased = 0
+    # interlaced input, deinterlace=False:
+    #     final output variable = interlaced_out
+    #     final _FieldBased = 2 if _tff else 1
+    # interlaced input, deinterlace=True:
+    #     final output variable = progressive_out
+    #     final _FieldBased = 0
+    # 
     # ── Progressive Input path ──────────────────────────────────────────────────────
     if not info.is_interlaced:
         clip_f   = _to_444ps(clip, info)
         denoised = _bm3d_chroma(clip_f, sigma_uv, radius, full_quality)
-        result   = _from_444ps(denoised, info)
-        return result
+        progressive_out   = _from_444ps(denoised, info)
+        # The progressive input path always returns progressive output.
+        return _set_output_props(progressive_out, info, field_based=0)
 
     # ── Interlaced Input path ───────────────────────────────────────────────────────
     #
@@ -525,8 +598,14 @@ def cnr2_bm3d(
     # DoubleWeave -> 720x576 @50fps, then SelectEvery back to 25fps interlaced
     rewoven       = core.std.DoubleWeave(reinterleaved, tff=_tff)
     interlaced_out = core.std.SelectEvery(rewoven, cycle=2, offsets=[0])
+    # If the user did not request deinterlacing, return the rewoven interlaced
+    # output.  Final frame props must mark this as TFF or BFF according to _tff.
     if not deinterlace:
-        return interlaced_out
+        return _set_output_props(
+            interlaced_out,
+            info,
+            field_based=2 if _tff else 1,
+        )
 
     # ── Optional bwdif deinterlace ────────────────────────────────────────────
     if not hasattr(core, "bwdif"):
@@ -538,5 +617,9 @@ def cnr2_bm3d(
     # field=0 -> keep bottom field -> 25fps progressive (BFF source)
     # field=2 -> output both fields -> 50fps progressive
     bwdif_field = 1 if _tff else 0
-    result = core.bwdif.BwDif(interlaced_out, field=bwdif_field)
-    return result
+    progressive_out = core.bwdif.BwDif(interlaced_out, field=bwdif_field)
+    # bwdif has produced progressive output here.  Final frame props must
+    # mark this as progressive, regardless of the input field order.
+    return _set_output_props(progressive_out, info, field_based=0)
+
+
