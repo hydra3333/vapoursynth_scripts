@@ -2,7 +2,7 @@
 Replacement for CNR2 chroma denoising, using bm3dcpu for chroma denoising and bwdif for deinterlacing.
     - Intended for use with chroma-noisey VHS captures eg for VHS-C home movies.
     - Handles both progressive and interlaced (PAL/NTSC) YUV sources.
-    - For interlaced sources, fields are separated by parity, denoised independently, then rewoven before optional bwdif deinterlacing.
+    - For interlaced sources, fields are separated by parity (TFF/BFF), denoised independently, then rewoven before optional bwdif deinterlacing.
     - Comments suggest PAL however it is likely to work on others if the format/matris in the clip is well formed.
 
 Main Function:
@@ -40,15 +40,21 @@ Main Function:
                       PAL VHS is almost universally TFF.
         deinterlace:  If True, run bwdif deinterlacer on the rewoven interlaced output.
                       Requires vapoursynth-bwdif installed.
+        deinterlace_rate:
+                      Only used when deinterlace=True.
+                      "same"   = same-rate progressive output, e.g. 25i -> 25p or 29.97i -> 29.97p.
+                      "double" = double-rate progressive output, e.g. 25i -> 50p or 29.97i -> 59.94p.
+                      Case is ignored, so "Same", "SAME", "Double", and "DOUBLE" are accepted.
         show_info:    If True, print the detected ClipInfo before processing.
                       Useful for verifying auto-detection on a new source.
 Notes:
     Handles both progressive and interlaced (PAL/NTSC) sources automatically.
     For interlaced sources, 
-        - fields are separated by parity
+        - fields are separated by parity (TFF/BFF)
         - each same-parity stream is denoised independently (so temporal comparisons are always between same-parity fields)
         - the streams are rewoven back to interlaced
-        - optionally deinterlaces with bwdif afterwards.
+        - optionally deinterlaces with bwdif afterwards, 
+          either to same-rate progressive output or double-rate progressive output.
     Format, matrix, range and field-order properties are auto-detected
     from frame properties (via vstools when available), with reasonable PAL fallbacks
     for VHS/SD content (<=576 lines -> 470bg matrix, limited range, TFF).
@@ -94,6 +100,7 @@ medium = cnr2_bm3d(
     radius=1,
     full_quality=True,
     deinterlace=True,
+    deinterlace_rate="same",
 )
 
 ## HEAVY - badly degraded tape, wider temporal window, deliver progressive output via bwdif
@@ -103,6 +110,7 @@ heavy = cnr2_bm3d(
     radius=2,             # 5 same-parity fields per output field (~200ms context)
     full_quality=True,
     deinterlace=True,
+    deinterlace_rate="double",
 )
 """
 
