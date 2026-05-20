@@ -140,7 +140,6 @@ class ClipInfo:
     tff:           Optional[bool]  # True=TFF, False=BFF, None=progressive
     # ── Internal (used by conversion helpers) ─────────────────────────────────
     _fmt_id:       int    # vs.VideoFormat.id for resize target
-
     def __str__(self) -> str:
         field_order = (
             "TFF" if self.tff is True else
@@ -166,10 +165,24 @@ class ClipInfo:
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _detect_subsampling(fmt: vs.VideoFormat) -> str:
-    """Convert VS subsampling_w/h to a human-readable 4:x:x string."""
+    """
+    Convert VapourSynth's format-level chroma subsampling shifts to a
+    human-readable 4:x:x string.
+
+    This does not use vstools.video_heuristics(), because subsampling is not
+    guessed frame metadata.  It is part of the actual VapourSynth VideoFormat:
+        subsampling_w = horizontal chroma subsampling shift
+        subsampling_h = vertical chroma subsampling shift
+    """
     sw, sh = fmt.subsampling_w, fmt.subsampling_h
-    _map = {(0, 0): "4:4:4", (1, 0): "4:2:2", (1, 1): "4:2:0",
-            (2, 0): "4:1:1", (0, 1): "4:4:0"}
+    _map = {
+        (0, 0): "4:4:4",
+        (1, 0): "4:2:2",
+        (1, 1): "4:2:0",
+        (2, 0): "4:1:1",
+        (0, 1): "4:4:0",
+    }
+    # Fallback for unusual subsampling layouts not explicitly listed above.
     return _map.get((sw, sh), f"4:{4 >> sw}:{4 >> sw >> sh}")
 
 def _detect_matrix_str(clip: vs.VideoNode) -> str:
@@ -178,22 +191,47 @@ def _detect_matrix_str(clip: vs.VideoNode) -> str:
 
     Prefer vstools.video_heuristics(), because it first reads frame props when
     available, then applies vstools' own resolution-based fallbacks when props
-    are missing.  That avoids maintaining our own PAL/NTSC/HD matrix guessing
-    table here.
+    are missing or explicitly marked as unspecified.
+
+    This avoids maintaining our own PAL/NTSC/HD matrix guessing table here.
     """
     if _HAS_VSTOOLS:
         try:
-            heuristics = video_heuristics(clip, props=True, prop_in=False)
-            return str(heuristics["matrix"])
+            heuristics_result = video_heuristics(
+                clip,
+                props=True,
+                prop_in=False,
+                assumed_return=True,
+            )
+            heuristics, _assumed_props = heuristics_result
+            m = heuristics["matrix"]
+
+            _map = {
+                1:  "709",
+                4:  "fcc",
+                5:  "470bg",
+                6:  "601",
+                7:  "240m",
+                9:  "2020ncl",
+                10: "2020cl",
+            }
+            return _map.get(int(m), "470bg")
         except Exception:
             pass
     f = clip.get_frame(0)
     m = f.props.get("_Matrix", None)
     if m is not None:
-        _map = {1: "709", 5: "470bg", 6: "601", 9: "2020ncl"}
+        _map = {
+            1: "709",
+            5: "470bg",
+            6: "601",
+            9: "2020ncl",
+        }
         return _map.get(int(m), "470bg")
     # Last-resort fallback only, used when vstools is unavailable or failed.
-    # This deliberately remains conservative and simple.
+    # 576-line SD is normally PAL/SECAM-style BT.470BG.
+    # 480/486-line SD is normally NTSC-style SMPTE 170M / BT.601.
+    # HD and above is normally BT.709.
     return "470bg" if clip.height == 576 else "601" if clip.height <= 486 else "709"
 
 def _detect_range(clip: vs.VideoNode) -> bool:
@@ -201,23 +239,36 @@ def _detect_range(clip: vs.VideoNode) -> bool:
     Return True for limited/TV range, False for full/PC range.
 
     Prefer vstools.video_heuristics(), because it tracks current VapourSynth
-    range-property naming and falls back safely when range props are absent.
+    range-property naming and falls back safely when range props are absent
+    or explicitly marked as unspecified.
     """
     if _HAS_VSTOOLS:
         try:
-            heuristics = video_heuristics(clip, props=True, prop_in=False)
+            heuristics_result = video_heuristics(
+                clip,
+                props=True,
+                prop_in=False,
+                assumed_return=True,
+            )
+            heuristics, _assumed_props = heuristics_result
             return heuristics["range"] != Range.FULL
         except Exception:
             pass
     f = clip.get_frame(0)
     # VapourSynth R74+ prefers _Range:
     #   _Range      0 = limited, 1 = full
+    #
     # Older scripts may still expose _ColorRange:
     #   _ColorRange 0 = full,    1 = limited
+    #
+    # Do not read _ColorRange unless _Range is absent, because reading
+    # _ColorRange in newer VapourSynth versions emits a deprecation warning.
     if "_Range" in f.props:
         return int(f.props["_Range"]) == 0
+
     if "_ColorRange" in f.props:
         return int(f.props["_ColorRange"]) != 0
+
     # Last-resort default for VHS/SD restoration work.
     return True
 
@@ -225,7 +276,10 @@ def _detect_field_order(clip: vs.VideoNode) -> tuple[bool, Optional[bool]]:
     """
     Returns (is_interlaced, tff_or_none).
     tff_or_none is True for TFF, False for BFF, None for progressive.
-    PAL VHS defaults to TFF when the frame prop is absent.
+
+    This function deliberately does not guess interlacing from PAL/NTSC frame
+    size or frame rate.  If field-order props are absent, the clip is treated
+    as progressive unless the caller overrides tff in cnr2_bm3d().
     """
     if _HAS_VSTOOLS:
         try:
@@ -252,6 +306,14 @@ def _detect_format(clip: vs.VideoNode) -> ClipInfo:
     Inspect a clip and return a ClipInfo dataclass with all detected
     format, colour, and scan properties.
 
+    Exact structural information such as width, height, bit depth, sample
+    type, format id, fps, frame count, and subsampling comes directly from
+    VapourSynth's clip/format attributes.
+
+    Metadata-style information such as matrix and range is delegated to the
+    helper functions below, which prefer vstools.video_heuristics() when
+    available and fall back conservatively when needed.
+
     Example usage:
         info = _detect_format(clip)
         print(info)
@@ -269,15 +331,11 @@ def _detect_format(clip: vs.VideoNode) -> ClipInfo:
     fmt = clip.format
     if fmt is None:
         raise ValueError("_detect_format: clip must have a constant (non-variable) format")
-
     cf_map = {vs.YUV: "YUV", vs.RGB: "RGB", vs.GRAY: "GRAY"}
     color_family = cf_map.get(fmt.color_family, "UNKNOWN")
-
     fps_frac = Fraction(clip.fps_num, clip.fps_den)
     fps_str  = f"{float(fps_frac):.3f} ({clip.fps_num}/{clip.fps_den})"
-
     is_interlaced, tff = _detect_field_order(clip)
-
     return ClipInfo(
         color_family  = color_family,
         subsampling   = _detect_subsampling(fmt) if fmt.color_family != vs.GRAY else "n/a",
@@ -301,9 +359,11 @@ def _detect_format(clip: vs.VideoNode) -> ClipInfo:
 def _to_444ps(clip: vs.VideoNode, info: ClipInfo) -> vs.VideoNode:
     """
     Convert any YUV integer clip -> YUV444PS for BM3D.
+
     Uses fmtc.resample for chroma upsampling (better placement than
     core.resize for 4:2:0 -> 4:4:4), then fmtc.bitdepth for float
     conversion with range handling.
+
     After SeparateFields the clip is progressive 720x288, so no interlaced
     chroma placement adjustments are needed.
     """
@@ -365,17 +425,16 @@ def _bm3d_chroma(
     """
     CBM3D chroma denoising on a YUV444PS clip.
     sigma[0]=0 -> luma is never denoised, only used to guide U/V block-matching.
+
     BM3Dv2 handles temporal aggregation internally - no VAggregate call needed.
     """
     sigma = [0.0, sigma_uv, sigma_uv]
-
     basic = core.bm3dcpu.BM3Dv2(
         clip_444ps,
         sigma=sigma,
         radius=radius,
         chroma=True,  # CBM3D: Y guides block-matching for U and V
     )
-
     if full_quality:
         # Second pass: Wiener filter guided by the basic estimate
         denoised = core.bm3dcpu.BM3Dv2(
@@ -387,7 +446,6 @@ def _bm3d_chroma(
         )
     else:
         denoised = basic
-
     # Restore luma from the original float clip - sigma[0]=0 means luma in
     # `denoised` is mathematically a no-op, but pulling directly from source
     # avoids any float accumulation artefact on the luma plane.
@@ -423,25 +481,23 @@ def cnr2_bm3d(
 
     # ── Detect everything in one call ─────────────────────────────────────────
     info = _detect_format(clip)
-
     # Apply manual overrides
     if matrix  is not None: info.matrix        = matrix
-    if limited is not None: info.limited        = limited
+    if limited is not None: info.limited       = limited
     if tff     is not None:
         info.tff           = tff
         info.is_interlaced = True
-
     if show_info:
         print(info)
 
-    # ── Progressive path ──────────────────────────────────────────────────────
+    # ── Progressive Input path ──────────────────────────────────────────────────────
     if not info.is_interlaced:
         clip_f   = _to_444ps(clip, info)
         denoised = _bm3d_chroma(clip_f, sigma_uv, radius, full_quality)
         result   = _from_444ps(denoised, info)
         return result
 
-    # ── Interlaced path ───────────────────────────────────────────────────────
+    # ── Interlaced Input path ───────────────────────────────────────────────────────
     #
     # Why split by parity: with radius≥1, BM3Dv2 compares adjacent frames
     # temporally. On a raw interlaced clip those neighbours have opposite
@@ -452,29 +508,23 @@ def cnr2_bm3d(
     #   SeparateFields  ->  [T0, B0, T1, B1, T2, B2, ...]  (50fps alternating)
     #   SelectEvery(2, [0])  ->  [T0, T1, T2, ...]          (25fps, top only)
     #   SelectEvery(2, [1])  ->  [B0, B1, B2, ...]          (25fps, bottom only)
-
     _tff   = info.tff if info.tff is not None else True  # PAL default
     fields = core.std.SeparateFields(clip, tff=_tff)
     top    = core.std.SelectEvery(fields, cycle=2, offsets=[0])  # 720x288 @25fps
     bot    = core.std.SelectEvery(fields, cycle=2, offsets=[1])  # 720x288 @25fps
-
     def _denoise_fields(f: vs.VideoNode) -> vs.VideoNode:
         # SeparateFields clips are progressive 720x288 - use same info but
         # the format detection still holds (same format, matrix, range).
         f_444 = _to_444ps(f, info)
         f_den = _bm3d_chroma(f_444, sigma_uv, radius, full_quality)
         return _from_444ps(f_den, info)
-
     top_den = _denoise_fields(top)
     bot_den = _denoise_fields(bot)
-
     # Reinterleave -> [T0, B0, T1, B1, ...] at 50fps field stream
     reinterleaved = core.std.Interleave([top_den, bot_den])
-
     # DoubleWeave -> 720x576 @50fps, then SelectEvery back to 25fps interlaced
     rewoven       = core.std.DoubleWeave(reinterleaved, tff=_tff)
     interlaced_out = core.std.SelectEvery(rewoven, cycle=2, offsets=[0])
-
     if not deinterlace:
         return interlaced_out
 
@@ -488,6 +538,5 @@ def cnr2_bm3d(
     # field=0 -> keep bottom field -> 25fps progressive (BFF source)
     # field=2 -> output both fields -> 50fps progressive
     bwdif_field = 1 if _tff else 0
-    return core.bwdif.BwDif(interlaced_out, field=bwdif_field)
-
-
+    result = core.bwdif.BwDif(interlaced_out, field=bwdif_field)
+    return result
