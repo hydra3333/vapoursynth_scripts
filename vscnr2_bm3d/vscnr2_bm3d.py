@@ -745,16 +745,20 @@ def cnr2_bm3d_precheck_video_file(
         VapourSynth normally stores sample/pixel aspect ratio as:
             _SARNum
             _SARDen
-        DAR is not normally stored as a standard frame prop here.  It is derived:
+        DAR is not normally stored as a standard frame prop here. It is derived:
             DAR = width * SARNum / (height * SARDen)
-        This is printed for human readability because users recognise 4:3 and
-        16:9 more readily than values such as 16:15 or 32:27.
+        This is printed for human readability because users recognise common
+        display ratios such as 4:3 and 16:9 more readily than values such as
+        16:15, 32:27, 1067:800, etc.
+        Deliberately limit the displayed DAR denominator quite strongly so that
+        decimal MediaInfo PAR values such as 1.067 produce useful standard DAR
+        output such as 4:3 rather than ugly near-equivalents such as 1067:800.
         """
         try:
             dar = Fraction(
                 int(width) * int(sar_num),
                 int(height) * int(sar_den),
-            ).limit_denominator(1000)
+            ).limit_denominator(100)
             return f"{dar.numerator}:{dar.denominator}"
         except Exception:
             return UNKNOWN
