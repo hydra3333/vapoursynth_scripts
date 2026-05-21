@@ -1543,7 +1543,10 @@ def cnr2_bm3d_precheck_video_file(
                 "and do not continue to cnr2_bm3d() yet."
             )
         _print_reference_tables()
-        raise RuntimeError(precheck_stop_message)
+        #raise RuntimeError(precheck_stop_message)
+        print("")
+        print(precheck_stop_message)
+        sys.exit(0)
     finally:
         # Minimise lingering references to temporary diagnostic objects.  The
         # actual file/source lifetime is controlled by the VapourSynth source
