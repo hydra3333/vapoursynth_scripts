@@ -1025,16 +1025,16 @@ def cnr2_bm3d_precheck_video_file(
         print("# Apply them to the clip before calling cnr2_bm3d().")
         if not ready:
             print("# This block is not valid Python until all ? placeholders are replaced.")
-        print("")
-        if suggested_dar != UNKNOWN:
-            print(f"    # Derived DAR for readability: {suggested_dar}")
-        print("clip = core.std.SetFrameProps(")
         suggested_dar = _derive_dar_from_sar(
             width,
             height,
             final_props.get("_SARNum", None),
             final_props.get("_SARDen", None),
         )
+        print("")
+        if suggested_dar != UNKNOWN:
+            print(f"# Derived DAR for readability: {suggested_dar}")
+        print("clip = core.std.SetFrameProps(")
         print("    clip,")
         for prop in RECOMMENDED_COPY_PROPS:
             value = final_props.get(prop, UNKNOWN)
