@@ -109,7 +109,16 @@ import vapoursynth as vs
 core = vs.core
 
 try:
-    from vstools import FieldBased, Matrix, Range, video_heuristics
+    # we need to use Vap[oursynth enums rather than hard coded values, so import stuff from vstools
+from vstools import (
+    ChromaLocation,
+    FieldBased,
+    Matrix,
+    Primaries,
+    Range,
+    Transfer,
+    video_heuristics,
+    )
     _HAS_VSTOOLS = True
 except ImportError as e:
     _HAS_VSTOOLS = False
@@ -465,6 +474,7 @@ def cnr2_bm3d_precheck_video_file(
     in its override parameters.
     """
     # check required plugins are available, using dummy "maximum values"
+    deinterlace = True
     deinterlace_rate = _normalize_deinterlace_rate("double")
     deinterlace_quality = _normalize_deinterlace_quality("enhanced")
     _check_dependencies(deinterlace, deinterlace_quality)
