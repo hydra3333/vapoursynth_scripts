@@ -148,28 +148,43 @@ __all__ = [
     "cnr2_bm3d_precheck_video_file",
 ]
 
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
+# Print module-owned diagnostic text to stderr.
+# -----------------------------------------------------------------------------
+def _print_stderr(*args: Any, **kwargs: Any) -> None:
+    """
+    Print module-owned diagnostic text to stderr.
+    VapourSynth scripts are commonly run through vspipe with stdout carrying
+    video frames into another program such as ffmpeg.  Any human-readable text
+    written to stdout can corrupt that pipe.  Keep all diagnostics, reports,
+    warnings, and optional show_info output on stderr.
+    """
+    kwargs["file"] = sys.stderr
+    kwargs["flush"] = True
+    print(*args, **kwargs)
+
+# -----------------------------------------------------------------------------
 # ClipInfo dataclass - everything detected about a clip in one place
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 
 @dataclass
 class ClipInfo:
-    # ── VS format ─────────────────────────────────────────────────────────────
+    # -- VS format -------------------------------------------------------------
     color_family:  str    # "YUV", "RGB", "GRAY"
     subsampling:   str    # "4:4:4", "4:2:2", "4:2:0", "4:4:0", etc.
     bit_depth:     int    # 8, 10, 12, 16, 32
     sample_type:   str    # "integer" or "float"
     width:         int
     height:        int
-    # ── Timing ────────────────────────────────────────────────────────────────
+    # -- Timing ----------------------------------------------------------------
     fps:           str    # human-readable, e.g. "25 (25000/1000)"
     num_frames:    int
-    # ── Detected properties ───────────────────────────────────────────────────
+    # -- Detected properties ---------------------------------------------------
     matrix:        str    # e.g. "470bg", "709", "601"
     limited:       bool   # True = TV/limited range
     is_interlaced: bool
     tff:           Optional[bool]  # True=TFF, False=BFF, None=progressive
-    # ── Internal (used by conversion helpers) ─────────────────────────────────
+    # -- Internal (used by conversion helpers) ---------------------------------
     _fmt_id:       int    # vs.VideoFormat.id for resize target
     def __str__(self) -> str:
         field_order = (
@@ -191,9 +206,9 @@ class ClipInfo:
             f"  Scan         : {field_order}\n"
         )
 
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 # Detection helpers  (internal - called by _detect_format)
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 
 def _detect_subsampling(fmt: vs.VideoFormat) -> str:
     """
@@ -349,9 +364,9 @@ def _bwdif_field_from_rate_and_order(
         bwdif_field = 0
     return bwdif_field
 
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 # _detect_format - the one call to rule them all
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 
 def _detect_format(clip: vs.VideoNode) -> ClipInfo:
     """
@@ -368,7 +383,7 @@ def _detect_format(clip: vs.VideoNode) -> ClipInfo:
 
     Example usage:
         info = _detect_format(clip)
-        print(info)
+        _print_stderr(info)
         # -> ClipInfo:
         #     Size         : 720x576
         #     Color family : YUV
@@ -417,9 +432,9 @@ def inspect_input_clip(clip: vs.VideoNode) -> ClipInfo:
     """
     return _detect_format(clip)
 
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 # pre-check source video file to assist user in identifying correct properties
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 
 def cnr2_bm3d_precheck_video_file(
     source_filename: str,
@@ -553,15 +568,15 @@ def cnr2_bm3d_precheck_video_file(
     # ------------------------------------------------------------------
 
     def _print_heading(title: str) -> None:
-        print("=" * 100)
-        print(title)
-        print("=" * 100)
+        _print_stderr("=" * 100)
+        _print_stderr(title)
+        _print_stderr("=" * 100)
 
     def _print_section(title: str) -> None:
         if title:
-            print("")
-            print(title)
-        print("-" * 100)
+            _print_stderr("")
+            _print_stderr(title)
+        _print_stderr("-" * 100)
 
     def _safe_str(value: Any) -> str:
         if value is None:
@@ -601,10 +616,10 @@ def cnr2_bm3d_precheck_video_file(
         for row in rows:
             for i, cell in enumerate(row):
                 widths[i] = max(widths[i], len(str(cell)))
-        print("  ".join(headers[i].ljust(widths[i]) for i in range(len(headers))))
-        print("  ".join("-" * widths[i] for i in range(len(headers))))
+        _print_stderr("  ".join(headers[i].ljust(widths[i]) for i in range(len(headers))))
+        _print_stderr("  ".join("-" * widths[i] for i in range(len(headers))))
         for row in rows:
-            print("  ".join(str(row[i]).ljust(widths[i]) for i in range(len(headers))))
+            _print_stderr("  ".join(str(row[i]).ljust(widths[i]) for i in range(len(headers))))
 
     def _format_fps(num: Any, den: Any) -> str:
         try:
@@ -717,7 +732,7 @@ def cnr2_bm3d_precheck_video_file(
                 "cnr2_bm3d_precheck_video_file: no video track was found by pymediainfo"
             )
         if len(video_tracks) > 1:
-            print(
+            _print_stderr(
                 "WARNING: pymediainfo found multiple video tracks. "
                 "Using the first video track for this diagnostic."
             )
@@ -969,7 +984,7 @@ def cnr2_bm3d_precheck_video_file(
                 return candidate_clip, track
             except Exception:
                 continue
-        print(
+        _print_stderr(
             "WARNING: BestSource could not open any video track from this file. "
             "Sections [2] and [4] will be incomplete."
         )
@@ -1007,7 +1022,7 @@ def cnr2_bm3d_precheck_video_file(
                 mapped["_ChromaLocation"] = int(heuristics["chromaloc"])
             return mapped, list(assumed_props)
         except Exception as e:
-            print(f"WARNING: vstools.video_heuristics() failed: {type(e).__name__}: {e}")
+            _print_stderr(f"WARNING: vstools.video_heuristics() failed: {type(e).__name__}: {e}")
             return {}, []
 
     # ------------------------------------------------------------------
@@ -1021,33 +1036,33 @@ def cnr2_bm3d_precheck_video_file(
         height: Any,
     ) -> None:
         if ready:
-            print("[5] Suggested SetFrameProps() code - ready to review and copy")
+            _print_stderr("[5] Suggested SetFrameProps() code - ready to review and copy")
         else:
-            print("[5] Suggested SetFrameProps() code - NOT READY TO COPY until all ? values are fixed")
-        print("-" * 100)
-        print("# Review these values before using them.")
-        print("# Apply them to the clip before calling cnr2_bm3d().")
+            _print_stderr("[5] Suggested SetFrameProps() code - NOT READY TO COPY until all ? values are fixed")
+        _print_stderr("-" * 100)
+        _print_stderr("# Review these values before using them.")
+        _print_stderr("# Apply them to the clip before calling cnr2_bm3d().")
         if not ready:
-            print("# This block is not valid Python until all ? placeholders are replaced.")
+            _print_stderr("# This block is not valid Python until all ? placeholders are replaced.")
         suggested_dar = _derive_dar_from_sar(
             width,
             height,
             final_props.get("_SARNum", None),
             final_props.get("_SARDen", None),
         )
-        print("")
+        _print_stderr("")
         if suggested_dar != UNKNOWN:
-            print(f"# Derived DAR for readability: {suggested_dar}")
-        print("clip = core.std.SetFrameProps(")
-        print("    clip,")
+            _print_stderr(f"# Derived DAR for readability: {suggested_dar}")
+        _print_stderr("clip = core.std.SetFrameProps(")
+        _print_stderr("    clip,")
         for prop in RECOMMENDED_COPY_PROPS:
             value = final_props.get(prop, UNKNOWN)
             if not _is_known(value):
                 if prop == "_FieldBased":
-                    print("    _FieldBased=?,       # REQUIRED: inspect the source video and choose the correct")
-                    print("                         # override_FieldBased value in cnr2_bm3d_precheck_video_file().")
+                    _print_stderr("    _FieldBased=?,       # REQUIRED: inspect the source video and choose the correct")
+                    _print_stderr("                         # override_FieldBased value in cnr2_bm3d_precheck_video_file().")
                 else:
-                    print(f"    {prop}=?,       # REQUIRED: determine this value before copying this block")
+                    _print_stderr(f"    {prop}=?,       # REQUIRED: determine this value before copying this block")
                 continue
             meaning = _meaning_for_prop(prop, value)
             comment = f"  # {meaning}" if meaning else ""
@@ -1065,26 +1080,26 @@ def cnr2_bm3d_precheck_video_file(
                 comment = "  # preserve; this script does not flip pixels"
             elif prop == "FlipVertical":
                 comment = "  # preserve; this script does not flip pixels"
-            print(f"    {prop}={int(value)}, {comment}")
-        print(")")
+            _print_stderr(f"    {prop}={int(value)}, {comment}")
+        _print_stderr(")")
 
     def _print_valid_values_for_prop(prop: str, indent: str = "    # ") -> None:
         enum_cls = PROP_TO_ENUM.get(prop)
         if enum_cls is not None:
-            print(f"{indent}Valid {PROP_TO_OVERRIDE_NAME[prop]} values:")
+            _print_stderr(f"{indent}Valid {PROP_TO_OVERRIDE_NAME[prop]} values:")
             for enum_value in enum_cls:
-                print(f"{indent}  {int(enum_value)} = {enum_value.name}")
+                _print_stderr(f"{indent}  {int(enum_value)} = {enum_value.name}")
             return
         if prop in {"_SARNum", "_SARDen", "_DurationNum", "_DurationDen"}:
-            print(f"{indent}Valid {PROP_TO_OVERRIDE_NAME[prop]} values: positive integers")
+            _print_stderr(f"{indent}Valid {PROP_TO_OVERRIDE_NAME[prop]} values: positive integers")
             return
         if prop == "Rotation":
-            print(f"{indent}Valid override_Rotation values: integer rotation metadata, usually 0/90/180/270")
+            _print_stderr(f"{indent}Valid override_Rotation values: integer rotation metadata, usually 0/90/180/270")
             return
         if prop in {"FlipHorizontal", "FlipVertical"}:
-            print(f"{indent}Valid {PROP_TO_OVERRIDE_NAME[prop]} values:")
-            print(f"{indent}  0 = false")
-            print(f"{indent}  1 = true")
+            _print_stderr(f"{indent}Valid {PROP_TO_OVERRIDE_NAME[prop]} values:")
+            _print_stderr(f"{indent}  0 = false")
+            _print_stderr(f"{indent}  1 = true")
             return
 
     def _print_reference_tables() -> None:
@@ -1126,25 +1141,25 @@ def cnr2_bm3d_precheck_video_file(
         failures: list[str],
         existing_overrides: dict[str, int],
     ) -> None:
-        print("Suggested updated precheck call:")
-        print("")
-        print("cnr2_bm3d_precheck_video_file(")
-        print("    source_filename,")
+        _print_stderr("Suggested updated precheck call:")
+        _print_stderr("")
+        _print_stderr("cnr2_bm3d_precheck_video_file(")
+        _print_stderr("    source_filename,")
         for prop, value in existing_overrides.items():
             override_name = PROP_TO_OVERRIDE_NAME[prop]
             meaning = _meaning_for_prop(prop, value)
-            print(f"    {override_name}={value},   # existing override: {meaning}")
+            _print_stderr(f"    {override_name}={value},   # existing override: {meaning}")
         failure_props: list[str] = []
         for prop in RECOMMENDED_COPY_PROPS:
             if any(prop in failure for failure in failures):
                 failure_props.append(prop)
         for prop in failure_props:
             override_name = PROP_TO_OVERRIDE_NAME[prop]
-            print(f"    # {prop} is missing or indeterminate.")
-            print("    # Inspect the source video and choose the correct value.")
+            _print_stderr(f"    # {prop} is missing or indeterminate.")
+            _print_stderr("    # Inspect the source video and choose the correct value.")
             _print_valid_values_for_prop(prop, indent="    # ")
-            print(f"    {override_name}=?,   # replace ? with the correct value for this video")
-        print(")")
+            _print_stderr(f"    {override_name}=?,   # replace ? with the correct value for this video")
+        _print_stderr(")")
 
     # ------------------------------------------------------------------
     # Start actual precheck logic.
@@ -1153,9 +1168,9 @@ def cnr2_bm3d_precheck_video_file(
     overrides = _validate_overrides()
 
     _print_heading("cnr2_bm3d_precheck_video_file()")
-    print(f"Source: {source_filename}")
-    print("Purpose: Inspect source-file metadata, first-frame VapourSynth properties, and vstools heuristics.")
-    print("         Print recommended SetFrameProps() code to apply before calling cnr2_bm3d().")
+    _print_stderr(f"Source: {source_filename}")
+    _print_stderr("Purpose: Inspect source-file metadata, first-frame VapourSynth properties, and vstools heuristics.")
+    _print_stderr("         Print recommended SetFrameProps() code to apply before calling cnr2_bm3d().")
     try:
         media_info = MediaInfo.parse(source_filename)
         video_track = _lookup_video_track(media_info)
@@ -1335,9 +1350,9 @@ def cnr2_bm3d_precheck_video_file(
             }
         _print_section("[2] BestSource first-frame VapourSynth properties")
         if clip is None or frame is None:
-            print("BestSource diagnostic open failed or was unavailable.")
+            _print_stderr("BestSource diagnostic open failed or was unavailable.")
         else:
-            print(f"BestSource video track used for diagnostic open: {bestsource_track}")
+            _print_stderr(f"BestSource video track used for diagnostic open: {bestsource_track}")
             table2_rows: list[list[Any]] = []
 
             for prop in RECOMMENDED_COPY_PROPS:
@@ -1353,7 +1368,7 @@ def cnr2_bm3d_precheck_video_file(
                         "source/codec flag; not recommended to copy",
                     ])
             _print_table(["VS prop", "VS value", "Meaning / notes"], table2_rows)
-            print("Clip timing from BestSource:")
+            _print_stderr("Clip timing from BestSource:")
             _print_table(
                 ["Timing field", "Value"],
                 [
@@ -1409,7 +1424,7 @@ def cnr2_bm3d_precheck_video_file(
             blended_props.get("_SARNum", None),
             blended_props.get("_SARDen", None),
         )
-        print("Clip timing:")
+        _print_stderr("Clip timing:")
         _print_table(
             ["Timing field", "Value"],
             [
@@ -1433,7 +1448,7 @@ def cnr2_bm3d_precheck_video_file(
             heuristics_props, assumed_props = _run_vstools_heuristics(prepared_clip)
         _print_section("[4] vstools.video_heuristics() after applying known BLENDED preliminary props")
         if not heuristics_props:
-            print("No vstools heuristic properties were available.")
+            _print_stderr("No vstools heuristic properties were available.")
         else:
             table4_rows: list[list[Any]] = []
             for prop in COLOUR_PROPS:
@@ -1444,14 +1459,14 @@ def cnr2_bm3d_precheck_video_file(
                     table4_rows.append([prop, heuristics_props[prop], note])
             _print_table(["VS prop", "VS value", "Meaning / notes"], table4_rows)
         if assumed_props:
-            print(f"vstools assumed props: {assumed_props}")
+            _print_stderr(f"vstools assumed props: {assumed_props}")
         heuristic_input_dar = _derive_dar_from_sar(
             getattr(video_track, "width", None),
             getattr(video_track, "height", None),
             blended_props.get("_SARNum", None),
             blended_props.get("_SARDen", None),
         )
-        print("Clip timing:")
+        _print_stderr("Clip timing:")
         _print_table(
             ["Timing field", "Value"],
             [
@@ -1509,33 +1524,33 @@ def cnr2_bm3d_precheck_video_file(
             "cnr2_bm3d_precheck_video_file: diagnostic precheck complete."
         )
         if ready:
-            print("PASS")
-            print("Recommended properties were generated.")
-            print("Next steps:")
-            print("  1. Review the SetFrameProps() block in section [5].")
-            print("  2. Copy it into your real .vpy after opening the source.")
-            print("  3. Comment out or remove the cnr2_bm3d_precheck_video_file() call.")
-            print("  4. Re-run the script and call cnr2_bm3d() on the prepared clip.")
-            print("  5. This precheck will deliberately stop the script now.")
+            _print_stderr("PASS")
+            _print_stderr("Recommended properties were generated.")
+            _print_stderr("Next steps:")
+            _print_stderr("  1. Review the SetFrameProps() block in section [5].")
+            _print_stderr("  2. Copy it into your real .vpy after opening the source.")
+            _print_stderr("  3. Comment out or remove the cnr2_bm3d_precheck_video_file() call.")
+            _print_stderr("  4. Re-run the script and call cnr2_bm3d() on the prepared clip.")
+            _print_stderr("  5. This precheck will deliberately stop the script now.")
             precheck_stop_message = (
                 "cnr2_bm3d_precheck_video_file: PASS; diagnostic precheck complete. "
                 "Review/copy the SetFrameProps() block, comment out this precheck call, "
                 "then re-run the real script."
             )
         else:
-            print("FAIL")
-            print("Problems found:")
+            _print_stderr("FAIL")
+            _print_stderr("Problems found:")
             for failure in failures:
-                print(f"  - {failure}")
-            print("What to do next:")
-            print("  1. Inspect the source video and determine the correct missing value(s).")
-            print("  2. Re-run this precheck with only the necessary override_* value(s).")
-            print("  3. Repeat until this precheck passes.")
-            print("  4. When it passes:")
-            print("       - comment out the cnr2_bm3d_precheck_video_file() call")
-            print("       - copy/review the SetFrameProps() block from section [5]")
-            print("       - apply that SetFrameProps() block to your real clip before calling cnr2_bm3d()")
-            print("")
+                _print_stderr(f"  - {failure}")
+            _print_stderr("What to do next:")
+            _print_stderr("  1. Inspect the source video and determine the correct missing value(s).")
+            _print_stderr("  2. Re-run this precheck with only the necessary override_* value(s).")
+            _print_stderr("  3. Repeat until this precheck passes.")
+            _print_stderr("  4. When it passes:")
+            _print_stderr("       - comment out the cnr2_bm3d_precheck_video_file() call")
+            _print_stderr("       - copy/review the SetFrameProps() block from section [5]")
+            _print_stderr("       - apply that SetFrameProps() block to your real clip before calling cnr2_bm3d()")
+            _print_stderr("")
             _print_suggested_updated_precheck_call(failures, overrides)
             precheck_stop_message = (
                 "cnr2_bm3d_precheck_video_file: FAIL; diagnostic precheck complete. "
@@ -1544,8 +1559,8 @@ def cnr2_bm3d_precheck_video_file(
             )
         _print_reference_tables()
         #raise RuntimeError(precheck_stop_message)
-        print("")
-        print(precheck_stop_message)
+        _print_stderr("")
+        _print_stderr(precheck_stop_message)
         sys.exit(0)
     finally:
         # Minimise lingering references to temporary diagnostic objects.  The
@@ -1566,9 +1581,9 @@ def cnr2_bm3d_precheck_video_file(
             pass
         gc.collect()
 
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 # Output frame property helpers
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 
 def _normalize_matrix_str(matrix: str) -> str:
     """
@@ -1674,9 +1689,9 @@ def _set_output_props(
         _FieldBased=field_based,
     )
 
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 # Dependency checking helpers
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 
 def _get_bwdif_filter():
     """
@@ -1785,9 +1800,9 @@ def _check_dependencies(deinterlace: bool, deinterlace_quality: str) -> None:
         if deinterlace_quality == "enhanced":
             _get_znedi3_filter()
 
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 # User parameter validation helpers
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 
 def _normalize_deinterlace_rate(deinterlace_rate: str) -> str:
     """
@@ -1928,9 +1943,9 @@ def _validate_user_parameters(
             "cnr2_bm3d: clip must have a known positive frame count"
         )
 
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 # Format conversion helpers
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 
 def _fmtconv_css_from_format(fmt: vs.VideoFormat) -> str:
     """
@@ -2032,10 +2047,10 @@ def _from_444ps(clip: vs.VideoNode, info: ClipInfo) -> vs.VideoNode:
         )
     return clip
 
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 # Core BM3D chroma denoising with optional luma denoising
 # (operates on YUV444PS only)
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 
 def _make_bwdif_edeint_clip(
     clip: vs.VideoNode,
@@ -2111,9 +2126,9 @@ def _bm3d_chroma_with_optional_luma(
     # Optional luma denoising was requested, so also return BM3D's denoised luma plane.
     return denoised
 
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 # Main function:  CNR2 replacement using bm3dcpu CBM3D chroma denoising.
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 
 def cnr2_bm3d(
     clip: vs.VideoNode,
@@ -2133,7 +2148,7 @@ def cnr2_bm3d(
     show_info: bool = False,                # print detected ClipInfo before processing
 ) -> vs.VideoNode:
 
-    # ── Basic validation before doing anything expensive ─────────────────────────────────────────
+    # -- Basic validation before doing anything expensive -----------------------------------------
 
     # Perform some basic clip checks
     if clip.format is None:
@@ -2167,7 +2182,7 @@ def cnr2_bm3d(
     # Detection itself now relies (mostly) on vstools, and processing relies on fmtconv/bm3dcpu.
     _check_dependencies(deinterlace, deinterlace_quality)
 
-    # ── Detect everything in one call ─────────────────────────────────────────
+    # -- Detect everything in one call -----------------------------------------
     info = _detect_format(clip)
     # Apply manual overrides
     if matrix  is not None: info.matrix        = _normalize_matrix_str(matrix)
@@ -2176,7 +2191,7 @@ def cnr2_bm3d(
         info.tff           = tff
         info.is_interlaced = True
     if show_info:
-        print(info)
+        _print_stderr(info)
     #
     # Results of the next block will be:
     #
@@ -2190,7 +2205,7 @@ def cnr2_bm3d(
     #     final output variable = progressive_out
     #     final _FieldBased = 0
     # 
-    # ── Progressive Input path ──────────────────────────────────────────────────────
+    # -- Progressive Input path ------------------------------------------------------
     if not info.is_interlaced:
         clip_f   = _to_444ps(clip, info)
         denoised = _bm3d_chroma_with_optional_luma(
@@ -2204,7 +2219,7 @@ def cnr2_bm3d(
         # The progressive input path always returns progressive output.
         return _set_output_props(progressive_out, info, field_based=0)
 
-    # ── Interlaced Input path ───────────────────────────────────────────────────────
+    # -- Interlaced Input path -------------------------------------------------------
     #
     # Why split by parity: with radius≥1, BM3Dv2 compares adjacent frames
     # temporally. On a raw interlaced clip those neighbours have opposite
@@ -2251,7 +2266,7 @@ def cnr2_bm3d(
             field_based=2 if _tff else 1,
         )
 
-    # ── Optional bwdif deinterlace ────────────────────────────────────────────
+    # -- Optional bwdif deinterlace --------------------------------------------
     # bwdif field values:
     #   field=0 -> same-rate progressive output, keep bottom field
     #   field=1 -> same-rate progressive output, keep top field
