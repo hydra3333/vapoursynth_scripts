@@ -89,6 +89,7 @@ Assumptions:
 
 """
 
+from __future__ import annotations
 import sys
 import os
 import gc
@@ -100,7 +101,6 @@ from typing import List, Dict, Optional, Union
 from pydantic import BaseModel  # Standard for data validation
 import rich                     # For beautiful terminal output
 
-from __future__ import annotations
 from dataclasses import dataclass
 from fractions import Fraction
 from typing import Any, Optional
