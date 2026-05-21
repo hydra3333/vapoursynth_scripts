@@ -12,7 +12,7 @@ Replacement for VapourSynth CNR2-style chroma denoising, using `bm3dcpu` for chr
 
 ---
 
-## CRITICAL NOTES - READ THIS BEFORE CONTINUING
+### CRITICAL NOTES - READ THIS BEFORE CONTINUING
 
 VHS capture files **notoriously often** have missing, incomplete, incorrect, or ambiguous metadata.
 This is especially common with AVI captures, lossless captures, DVD/VOB/MPEG sources,
@@ -33,7 +33,7 @@ inverse telecine / field matching, not with `bwdif` deinterlacing here.
 
 ---
 
-## RECOMMENDED SAFE WORKFLOW
+### RECOMMENDED SAFE WORKFLOW
 
 The recommended workflow is now:    
 
@@ -111,7 +111,7 @@ clip.set_output()
 
 ---
 
-## What the precheck helper `cnr2_bm3d_precheck_video_file()` does
+### What the precheck helper `cnr2_bm3d_precheck_video_file()` does
 
 ```python
 def cnr2_bm3d_precheck_video_file(
@@ -149,7 +149,7 @@ chances of success.  Fell free to skip it at your own risk.
 
 ---
 
-## If the precheck cannot determine a mandatory property
+### If the precheck cannot determine a mandatory property
 
 If the precheck `cnr2_bm3d_precheck_video_file()` finds missing or indeterminate mandatory information,
 it will print `FAIL` and suggest an updated call parameters using one or more `override_*` values.
@@ -181,7 +181,7 @@ follow the process above , then run the real vpy script.
 
 ---
 
-## Less safe workflow
+### Less safe workflow
 
 You may skip `cnr2_bm3d_precheck_video_file()` at your own risk,
 assuming the input clip itself already has  correct VapourSynth frame properties
@@ -209,7 +209,7 @@ it will fail rather than guessing.
 
 ---
 
-## Telecine / 2:3 pulldown sources
+### Telecine / 2:3 pulldown sources
 
 If the precheck detects progressive telecine / 2:3 pulldown material, 
 `bwdif` deinterlacing is not the correct operation for that clip.
@@ -219,7 +219,7 @@ or use `cnr2_bm3d()` only for denoising after the clip has been prepared appropr
 
 ---
 
-## Main function cnr2_bm3d()
+### Main function cnr2_bm3d()
 
 ```python
 def cnr2_bm3d(
@@ -238,7 +238,7 @@ def cnr2_bm3d(
 ) -> vs.VideoNode:
 ```
 
-### Arguments
+#### Arguments
 
 `clip`  
 Input YUV clip. Any bit depth and subsampling.
@@ -297,7 +297,7 @@ If `True`, prints the detected `ClipInfo` before processing. Useful for checking
 
 ---
 
-## Notes
+### Notes
 
 The function handles progressive and interlaced PAL/NTSC sources.
 
@@ -313,7 +313,7 @@ For normal interlaced PAL VHS, TFF is common, but do not blindly assume it for e
 
 ---
 
-## Dependencies
+### Dependencies
 
 ```text
 VapourSynth R76+
@@ -336,7 +336,7 @@ Enhanced deinterlacing requires `vapoursynth-znedi3`.
 
 ---
 
-## Plugin autoload assumptions
+### Plugin autoload assumptions
 
 The relevant DLL/plugin files are expected to be auto-loaded by VapourSynth, for example:
 
@@ -353,9 +353,9 @@ Exact paths may differ depending on your (possibly portable) VapourSynth layout.
 
 ---
 
-## Usage examples
+### Usage examples
 
-### Example 1 - Run precheck first
+#### Example 1 - Run precheck first
 
 ```python
 import vapoursynth as vs
@@ -372,7 +372,7 @@ cnr2_bm3d_precheck_video_file(source_filename)
 # comment out this precheck call, then run the real processing script.
 ```
 
-### Example 2 - Light chroma-only denoise, keep interlaced
+#### Example 2 - Light chroma-only denoise, keep interlaced
 
 ```python
 light = cnr2_bm3d(
@@ -386,7 +386,7 @@ light = cnr2_bm3d(
 )
 ```
 
-### Example 3 - Light chroma plus very light luma denoise, keep interlaced
+#### Example 3 - Light chroma plus very light luma denoise, keep interlaced
 
 ```python
 light = cnr2_bm3d(
@@ -400,7 +400,7 @@ light = cnr2_bm3d(
 )
 ```
 
-### Example 4 - Medium CNR2-like chroma denoise, same-rate progressive output
+#### Example 4 - Medium CNR2-like chroma denoise, same-rate progressive output
 
 ```python
 medium = cnr2_bm3d(
@@ -415,7 +415,7 @@ medium = cnr2_bm3d(
 )
 ```
 
-### Example 5 - Medium chroma plus light luma denoise, enhanced deinterlacing
+#### Example 5 - Medium chroma plus light luma denoise, enhanced deinterlacing
 
 ```python
 medium = cnr2_bm3d(
@@ -430,7 +430,7 @@ medium = cnr2_bm3d(
 )
 ```
 
-### Example 6 - Heavy chroma denoise, double-rate progressive output
+#### Example 6 - Heavy chroma denoise, double-rate progressive output
 
 ```python
 heavy = cnr2_bm3d(
@@ -445,7 +445,7 @@ heavy = cnr2_bm3d(
 )
 ```
 
-### Example 7 - Heavy chroma plus moderate luma denoise, enhanced double-rate deinterlacing
+#### Example 7 - Heavy chroma plus moderate luma denoise, enhanced double-rate deinterlacing
 
 ```python
 heavy = cnr2_bm3d(
