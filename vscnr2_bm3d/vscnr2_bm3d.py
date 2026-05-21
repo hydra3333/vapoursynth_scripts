@@ -71,14 +71,16 @@ Main Function:
 
 Dependencies:
     vapoursynth R76+
-    pymediainfo           (pip install pymediainfo)          - for info about video sources
-    vsjetpack             (pip install vsjetpack)            - for vstools stuff including video_heuristics()
-    fmtconv               (pip install vapoursynth-fmtconv)  - for format conversions
-    vapoursynth-bm3dcpu   (pip install vapoursynth-bm3dcpu)  - for chroma denoising and optional luma denoising
-    vapoursynth-bwdif     (pip install vapoursynth-bwdif)    - for optional de3interlacing
+    pymediainfo            (pip install vapoursynth-bestSource) - for info about video sources
+    vapoursynth-bestSource (pip install pymediainfo)            - for info about video sources
+    vsjetpack              (pip install vsjetpack)              - for vstools stuff including video_heuristics()
+    fmtconv                (pip install vapoursynth-fmtconv)    - for format conversions
+    vapoursynth-bm3dcpu    (pip install vapoursynth-bm3dcpu)    - for chroma denoising and optional luma denoising
+    vapoursynth-bwdif      (pip install vapoursynth-bwdif)      - for optional de3interlacing
 
 Assumptions:
     The following dll files are auto-loaded by vapoursynth:
+        vapoursynth\plugins\libbestsource.dll
         vapoursynth\plugins\bwdif.dll
         vapoursynth\plugins\fmtconv.dll
         vapoursynth\plugins\bm3dcpu\manifest.vs
@@ -87,10 +89,21 @@ Assumptions:
 
 """
 
+import sys
+import os
+import gc
+from pathlib import Path
+import shutil
+import tempfile
+import json
+from typing import List, Dict, Optional, Union
+from pydantic import BaseModel  # Standard for data validation
+import rich                     # For beautiful terminal output
+
 from __future__ import annotations
 from dataclasses import dataclass
 from fractions import Fraction
-from typing import Optional
+from typing import Any, Optional
 
 import vapoursynth as vs
 core = vs.core
@@ -98,13 +111,32 @@ core = vs.core
 try:
     from vstools import FieldBased, Matrix, Range, video_heuristics
     _HAS_VSTOOLS = True
-except ImportError:
+except ImportError as e:
     _HAS_VSTOOLS = False
+    #raise RuntimeError(
+    #    "Missing dependency for heuristics, vsjetpack vstools.\n"
+    #    "  Install it into this portable Python like.\n"
+    #    "     python.exe -m pip install vsjetpack"
+    #) from e
+    pass
+
+try:
+    from pymediainfo import MediaInfo
+    _HAS_PYMEDIAINFO = True
+except ImportError as e:
+    _HAS_PYMEDIAINFO = False
+    #raise RuntimeError(
+    #    "cnr2_bm3d_precheck_video_file: missing Python dependency pymediainfo.\n"
+    #    "  Install it into this portable Python like.\n"
+    #    "     python.exe -m pip install pymediainfo"
+    #) from e
+    pass
 
 # expose these functions publically
 __all__ = [
     "cnr2_bm3d",
     "inspect_input_clip",
+    "cnr2_bm3d_precheck_video_file",
 ]
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -377,6 +409,918 @@ def inspect_input_clip(clip: vs.VideoNode) -> ClipInfo:
     return _detect_format(clip)
 
 # ─────────────────────────────────────────────────────────────────────────────
+# pre-check source video file to assist user in identifying correct properties
+# ─────────────────────────────────────────────────────────────────────────────
+
+def cnr2_bm3d_precheck_video_file(
+    source_filename: str,
+    *,
+    override_FieldBased: Optional[int] = None,
+    override_Matrix: Optional[int] = None,
+    override_Range: Optional[int] = None,
+    override_Primaries: Optional[int] = None,
+    override_Transfer: Optional[int] = None,
+    override_ChromaLocation: Optional[int] = None,
+    override_SARNum: Optional[int] = None,
+    override_SARDen: Optional[int] = None,
+    override_DurationNum: Optional[int] = None,
+    override_DurationDen: Optional[int] = None,
+    override_Rotation: Optional[int] = None,
+    override_FlipHorizontal: Optional[int] = None,
+    override_FlipVertical: Optional[int] = None,
+) -> None:
+    """
+    Diagnostic-only precheck diagnostic helper for source video files.
+    Operates independently of of cnr2_bm3d() with its own checks.
+
+    IT HAS BEEN FOUND NECESSARY BECAUSE:
+        VHS capture files OFTEN have missing, incomplete, incorrect, or
+        ambiguous metadata.  This is ESPECIALLY COMMON with AVI captures,
+        lossless captures, DVD/VOB/MPEG sources, and files produced by
+        older capture workflows and USB hadrware viseo capture devices.
+
+    This function inspects a source file using pymediainfo, opens it briefly
+    with BestSource to inspect actual first-frame VapourSynth properties, then
+    runs vstools.video_heuristics() after applying known blended preliminary
+    properties.
+    It prints:
+        [1] pymediainfo source metadata
+        [2] BestSource first-frame VapourSynth properties
+        [3] BLENDED preliminary properties before vstools heuristics
+        [4] vstools.video_heuristics() after applying known BLENDED preliminary props
+        [5] Suggested SetFrameProps() code
+        [6] PRECHECK RESULT
+        [7] Reference: relevant VapourSynth frame properties
+        [8] Reference: props deliberately not recommended for copying
+
+    This HELPER diagnostic function does NOT return a processed clip.
+    It is intended to be run, reviewed, and then commented out before
+    running cnr2_bm3d(). The user should copy/review the printed
+    SetFrameProps() block and apply it to their real source clip
+    BEFORE calling cnr2_bm3d().
+
+    This helper deliberately uses actual (as at Vapoursynth R76)
+        - VapourSynth frame-property names
+        - Vapoursynth numeric values
+    in its override parameters.
+    """
+    # check required plugins are available, using dummy "maximum values"
+    deinterlace_rate = _normalize_deinterlace_rate("double")
+    deinterlace_quality = _normalize_deinterlace_quality("enhanced")
+    _check_dependencies(deinterlace, deinterlace_quality)
+
+    UNKNOWN = "unknown"
+    PARTIAL = "partial"
+    OMIT = "-"
+
+    RECOMMENDED_COPY_PROPS = [
+        "_FieldBased",
+        "_Matrix",
+        "_Range",
+        "_Primaries",
+        "_Transfer",
+        "_ChromaLocation",
+        "_SARNum",
+        "_SARDen",
+        "_DurationNum",
+        "_DurationDen",
+        "Rotation",
+        "FlipHorizontal",
+        "FlipVertical",
+    ]
+    SOURCE_CODEC_FLAGS_NOT_RECOMMENDED = {
+        "_PictType",
+        "RepeatField",
+        "TopFieldFirst",
+    }
+    FIELD_BASED_MEANINGS = {
+        0: "progressive",
+        1: "BFF interlaced, Bottom Field First",
+        2: "TFF interlaced, Top Field First",
+    }
+    RANGE_MEANINGS = {
+        0: "limited / TV range",
+        1: "full / PC range",
+    }
+    MATRIX_MEANINGS = {
+        1: "BT.709",
+        4: "FCC",
+        5: "BT.470BG / PAL SD",
+        6: "BT.601 / ST170M / NTSC SD",
+        7: "SMPTE 240M",
+        9: "BT.2020 non-constant luminance",
+        10: "BT.2020 constant luminance",
+    }
+    PRIMARIES_MEANINGS = {
+        1: "BT.709",
+        5: "BT.470BG",
+        6: "BT.601 / ST170M",
+        9: "BT.2020",
+    }
+
+    TRANSFER_MEANINGS = {
+        1: "BT.709",
+        5: "BT.470BG",
+        6: "BT.601 / ST170M",
+        13: "sRGB",
+        16: "PQ / ST2084",
+        18: "HLG",
+    }
+
+    CHROMALOC_MEANINGS = {
+        0: "left",
+        1: "center",
+        2: "top-left",
+        3: "top",
+        4: "bottom-left",
+        5: "bottom",
+    }
+    def _print_heading(title: str) -> None:
+        print("=" * 100)
+        print(title)
+        print("=" * 100)
+
+    def _print_section(title: str) -> None:
+        print("")
+        print(title)
+        print("-" * 100)
+
+    def _safe_str(value: Any) -> str:
+        if value is None:
+            return "not reported"
+        return str(value)
+
+    def _is_known(value: Any) -> bool:
+        return value not in (None, UNKNOWN, PARTIAL, OMIT)
+
+    def _validate_override_int(
+        name: str,
+        value: Optional[int],
+        allowed: Optional[set[int]] = None,
+        minimum: Optional[int] = None,
+    ) -> None:
+        if value is None:
+            return
+        if isinstance(value, bool) or not isinstance(value, int):
+            raise TypeError(f"{name} must be an integer or None")
+        if allowed is not None and value not in allowed:
+            allowed_text = ", ".join(str(v) for v in sorted(allowed))
+            raise ValueError(f"{name} must be one of: {allowed_text}")
+        if minimum is not None and value < minimum:
+            raise ValueError(f"{name} must be >= {minimum}")
+
+    def _validate_overrides() -> dict[str, int]:
+        _validate_override_int("override_FieldBased", override_FieldBased, {0, 1, 2})
+        _validate_override_int("override_Matrix", override_Matrix, set(MATRIX_MEANINGS))
+        _validate_override_int("override_Range", override_Range, {0, 1})
+        _validate_override_int("override_Primaries", override_Primaries, set(PRIMARIES_MEANINGS))
+        _validate_override_int("override_Transfer", override_Transfer, set(TRANSFER_MEANINGS))
+        _validate_override_int(
+            "override_ChromaLocation",
+            override_ChromaLocation,
+            set(CHROMALOC_MEANINGS),
+        )
+        _validate_override_int("override_SARNum", override_SARNum, minimum=1)
+        _validate_override_int("override_SARDen", override_SARDen, minimum=1)
+        _validate_override_int("override_DurationNum", override_DurationNum, minimum=1)
+        _validate_override_int("override_DurationDen", override_DurationDen, minimum=1)
+        _validate_override_int("override_Rotation", override_Rotation)
+        _validate_override_int("override_FlipHorizontal", override_FlipHorizontal, {0, 1})
+        _validate_override_int("override_FlipVertical", override_FlipVertical, {0, 1})
+        overrides: dict[str, int] = {}
+        if override_FieldBased is not None:
+            overrides["_FieldBased"] = override_FieldBased
+        if override_Matrix is not None:
+            overrides["_Matrix"] = override_Matrix
+        if override_Range is not None:
+            overrides["_Range"] = override_Range
+        if override_Primaries is not None:
+            overrides["_Primaries"] = override_Primaries
+        if override_Transfer is not None:
+            overrides["_Transfer"] = override_Transfer
+        if override_ChromaLocation is not None:
+            overrides["_ChromaLocation"] = override_ChromaLocation
+        if override_SARNum is not None:
+            overrides["_SARNum"] = override_SARNum
+        if override_SARDen is not None:
+            overrides["_SARDen"] = override_SARDen
+        if override_DurationNum is not None:
+            overrides["_DurationNum"] = override_DurationNum
+        if override_DurationDen is not None:
+            overrides["_DurationDen"] = override_DurationDen
+        if override_Rotation is not None:
+            overrides["Rotation"] = override_Rotation
+        if override_FlipHorizontal is not None:
+            overrides["FlipHorizontal"] = override_FlipHorizontal
+        if override_FlipVertical is not None:
+            overrides["FlipVertical"] = override_FlipVertical
+        return overrides
+
+    def _lookup_video_track(media_info: Any) -> Any:
+        video_tracks = [
+            track for track in media_info.tracks
+            if getattr(track, "track_type", None) == "Video"
+        ]
+        if not video_tracks:
+            raise ValueError(
+                "cnr2_bm3d_precheck_video_file: no video track was found by pymediainfo"
+            )
+        if len(video_tracks) > 1:
+            print(
+                "WARNING: pymediainfo found multiple video tracks. "
+                "Using the first video track for this diagnostic."
+            )
+        return video_tracks[0]
+
+    def _parse_positive_fraction(value: Any) -> Optional[tuple[int, int]]:
+        if value is None:
+            return None
+        try:
+            frac = Fraction(str(value)).limit_denominator(1000)
+        except Exception:
+            return None
+        if frac.numerator <= 0 or frac.denominator <= 0:
+            return None
+        return frac.numerator, frac.denominator
+
+    def _scan_order_to_field_based(scan_order: Any) -> Any:
+        if scan_order is None:
+            return UNKNOWN
+        text = str(scan_order).strip().lower()
+        if text == "":
+            return UNKNOWN
+        compact = (
+            text.replace(" ", "")
+            .replace("-", "")
+            .replace("_", "")
+            .replace("/", "")
+        )
+        if compact in {"bff", "bottomfieldfirst", "bottomfirst"}:
+            return 1
+        if compact in {"tff", "topfieldfirst", "topfirst"}:
+            return 2
+        if "23pulldown" in compact or "232pulldown" in compact:
+            return "pulldown"
+        return UNKNOWN
+
+    def _scan_type_to_preliminary_field_based(
+        scan_type: Any,
+        scan_order: Any,
+    ) -> Any:
+        scan_type_text = "" if scan_type is None else str(scan_type).strip().lower()
+        scan_order_text = "" if scan_order is None else str(scan_order).strip()
+        if scan_type_text == "":
+            return UNKNOWN
+        if scan_type_text == "interlaced":
+            field_based = _scan_order_to_field_based(scan_order_text)
+            if field_based in (1, 2):
+                return field_based
+            return PARTIAL
+        if scan_type_text == "progressive":
+            if scan_order_text == "":
+                return 0
+            if _scan_order_to_field_based(scan_order_text) == "pulldown":
+                return "pulldown"
+            return UNKNOWN
+        return UNKNOWN
+
+    def _map_mediainfo_matrix(value: Any) -> Any:
+        if value is None:
+            return UNKNOWN
+        text = str(value).lower()
+        if "709" in text:
+            return 1
+        if "470" in text or "pal" in text and "601" not in text:
+            return 5
+        if "601" in text or "170" in text or "ntsc" in text:
+            return 6
+        if "2020" in text:
+            return 9
+        return UNKNOWN
+
+    def _map_mediainfo_primaries(value: Any) -> Any:
+        if value is None:
+            return UNKNOWN
+        text = str(value).lower()
+        if "709" in text:
+            return 1
+        if "470" in text:
+            return 5
+        if "601" in text or "170" in text or "ntsc" in text or "pal" in text:
+            return 6 if "ntsc" in text else 5
+        if "2020" in text:
+            return 9
+        return UNKNOWN
+
+    def _map_mediainfo_transfer(value: Any) -> Any:
+        if value is None:
+            return UNKNOWN
+        text = str(value).lower()
+        if "709" in text:
+            return 1
+        if "470" in text:
+            return 5
+        if "601" in text or "170" in text:
+            return 6
+        if "srgb" in text:
+            return 13
+        if "2084" in text or "pq" in text:
+            return 16
+        if "hlg" in text:
+            return 18
+        return UNKNOWN
+
+    def _map_mediainfo_range(value: Any) -> Any:
+        if value is None:
+            return UNKNOWN
+        text = str(value).lower()
+        if "limited" in text or "tv" in text:
+            return 0
+        if "full" in text or "pc" in text:
+            return 1
+        return UNKNOWN
+
+    def _meaning_for_prop(prop: str, value: Any) -> str:
+        if not _is_known(value):
+            if value == PARTIAL:
+                return "partial / incomplete information"
+            return "unknown"
+        if prop == "_FieldBased":
+            return FIELD_BASED_MEANINGS.get(int(value), "unrecognised _FieldBased value")
+        if prop == "_Range":
+            return RANGE_MEANINGS.get(int(value), "unrecognised _Range value")
+        if prop == "_Matrix":
+            return MATRIX_MEANINGS.get(int(value), "unrecognised _Matrix value")
+        if prop == "_Primaries":
+            return PRIMARIES_MEANINGS.get(int(value), "unrecognised _Primaries value")
+        if prop == "_Transfer":
+            return TRANSFER_MEANINGS.get(int(value), "unrecognised _Transfer value")
+        if prop == "_ChromaLocation":
+            return CHROMALOC_MEANINGS.get(int(value), "unrecognised _ChromaLocation value")
+        if prop in {"FlipHorizontal", "FlipVertical"}:
+            return "true" if int(value) else "false"
+        return ""
+
+    def _print_table(
+        headers: list[str],
+        rows: list[list[Any]],
+    ) -> None:
+        widths = [len(header) for header in headers]
+        for row in rows:
+            for i, cell in enumerate(row):
+                widths[i] = max(widths[i], len(str(cell)))
+        print("  ".join(headers[i].ljust(widths[i]) for i in range(len(headers))))
+        print("  ".join("-" * widths[i] for i in range(len(headers))))
+        for row in rows:
+            print("  ".join(str(row[i]).ljust(widths[i]) for i in range(len(headers))))
+
+    def _props_from_frame(frame: vs.VideoFrame) -> dict[str, Any]:
+        props: dict[str, Any] = {}
+        for prop in RECOMMENDED_COPY_PROPS:
+            if prop in frame.props:
+                props[prop] = frame.props[prop]
+        return props
+
+    def _is_unspecified_prop(prop: str, value: Any) -> bool:
+        if value is None:
+            return True
+        if prop in {"_Matrix", "_Primaries", "_Transfer"}:
+            return int(value) == 2
+        return False
+
+    def _known_props_only(props: dict[str, Any]) -> dict[str, int]:
+        result: dict[str, int] = {}
+        for key, value in props.items():
+            if key not in RECOMMENDED_COPY_PROPS:
+                continue
+            if not _is_known(value):
+                continue
+            if _is_unspecified_prop(key, value):
+                continue
+            try:
+                result[key] = int(value)
+            except Exception:
+                continue
+        return result
+
+    def _try_open_bestsource_first_video_track(source: str) -> tuple[Optional[vs.VideoNode], Optional[int]]:
+        #if not hasattr(core, "bs") or not hasattr(core.bs, "VideoSource"):
+        #    print(
+        #        "WARNING: BestSource is not loaded. Section [2] and [4] will be incomplete."
+        #    )
+        #    return None, None
+        for track in range(0, 9):
+            try:
+                clip = core.bs.VideoSource(source, track=track)
+                clip.get_frame(0)
+                return clip, track
+            except Exception:
+                continue
+        print(
+            "WARNING: BestSource could not open any video track from this file. "
+            "Section [2] and [4] will be incomplete."
+        )
+        return None, None
+
+    def _duration_props_from_clip(clip: vs.VideoNode) -> dict[str, int]:
+        if clip.fps_num > 0 and clip.fps_den > 0:
+            return {
+                "_DurationNum": int(clip.fps_den),
+                "_DurationDen": int(clip.fps_num),
+            }
+        return {}
+
+    def _run_vstools_heuristics(prepared_clip: vs.VideoNode) -> tuple[dict[str, Any], list[str]]:
+        if not _HAS_VSTOOLS:
+            return {}, []
+        try:
+            heuristics_result = video_heuristics(
+                prepared_clip,
+                props=True,
+                prop_in=False,
+                assumed_return=True,
+            )
+            heuristics, assumed_props = heuristics_result
+            mapped: dict[str, Any] = {}
+            if "matrix" in heuristics:
+                mapped["_Matrix"] = int(heuristics["matrix"])
+            if "range" in heuristics:
+                mapped["_Range"] = int(heuristics["range"])
+            if "primaries" in heuristics:
+                mapped["_Primaries"] = int(heuristics["primaries"])
+            if "transfer" in heuristics:
+                mapped["_Transfer"] = int(heuristics["transfer"])
+            if "chromaloc" in heuristics:
+                mapped["_ChromaLocation"] = int(heuristics["chromaloc"])
+
+            return mapped, list(assumed_props)
+        except Exception as e:
+            print(f"WARNING: vstools.video_heuristics() failed: {type(e).__name__}: {e}")
+            return {}, []
+
+    def _format_fps(num: Any, den: Any) -> str:
+        try:
+            num_i = int(num)
+            den_i = int(den)
+            if num_i > 0 and den_i > 0:
+                return f"{num_i / den_i:.3f}"
+        except Exception:
+            pass
+        return UNKNOWN
+
+    def _print_setframeprops_block(final_props: dict[str, Any], ready: bool) -> None:
+        if ready:
+            print("[5] Suggested SetFrameProps() code - ready to review and copy")
+        else:
+            print("[5] Suggested SetFrameProps() code - NOT READY TO COPY until all ? values are fixed")
+        print("-" * 100)
+        print("# Review these values before using them.")
+        print("# Apply them to the clip before calling cnr2_bm3d().")
+        if not ready:
+            print("# This block is not valid Python until all ? placeholders are replaced.")
+        print("")
+        print("clip = core.std.SetFrameProps(")
+        print("    clip,")
+        for prop in RECOMMENDED_COPY_PROPS:
+            value = final_props.get(prop, UNKNOWN)
+            if not _is_known(value):
+                if prop == "_FieldBased":
+                    print(
+                        "    _FieldBased=?,       # REQUIRED: inspect the source video and choose the correct"
+                    )
+                    print(
+                        "                         # override_FieldBased value in cnr2_bm3d_precheck_video_file()."
+                    )
+                else:
+                    print(f"    {prop}=?,       # REQUIRED: determine this value before copying this block")
+                continue
+
+            meaning = _meaning_for_prop(prop, value)
+            comment = f"  # {meaning}" if meaning else ""
+            if prop == "_DurationNum":
+                comment = "  # frame duration numerator"
+            elif prop == "_DurationDen":
+                comment = "  # frame duration denominator"
+            elif prop == "_SARNum":
+                comment = "  # sample aspect ratio numerator"
+            elif prop == "_SARDen":
+                comment = "  # sample aspect ratio denominator"
+            elif prop == "Rotation":
+                comment = "  # preserve; this script does not rotate pixels"
+            elif prop == "FlipHorizontal":
+                comment = "  # preserve; this script does not flip pixels"
+            elif prop == "FlipVertical":
+                comment = "  # preserve; this script does not flip pixels"
+            print(f"    {prop}={int(value)}, {comment}")
+        print(")")
+
+    def _print_reference_tables() -> None:
+        _print_section("[7] Reference: relevant VapourSynth frame properties")
+        _print_table(
+            ["VS prop", "Valid / common values"],
+            [
+                ["_FieldBased", "0=progressive, 1=BFF interlaced, 2=TFF interlaced"],
+                ["_Range", "0=limited/TV range, 1=full/PC range"],
+                [
+                    "_Matrix",
+                    "1=BT.709, 5=BT.470BG/PAL SD, 6=BT.601/ST170M/NTSC SD, 9=BT.2020 NCL, 10=BT.2020 CL",
+                ],
+                ["_Primaries", "1=BT.709, 5=BT.470BG, 6=BT.601/ST170M, 9=BT.2020"],
+                ["_Transfer", "1=BT.709, 5=BT.470BG, 6=BT.601/ST170M, 13=sRGB, 16=PQ, 18=HLG"],
+                ["_ChromaLocation", "0=left, 1=center, 2=top-left, 3=top, 4=bottom-left, 5=bottom"],
+                ["_SARNum/_SARDen", "positive integers, e.g. 1/1, 16/15, 32/27"],
+                ["_DurationNum/Den", "frame duration, e.g. 1/25 or 1001/30000"],
+                ["Rotation", "usually 0, 90, 180, 270 if present"],
+                ["FlipHorizontal", "0=false, 1=true if present"],
+                ["FlipVertical", "0=false, 1=true if present"],
+            ],
+        )
+        _print_section("[8] Reference: props deliberately not recommended for copying")
+        _print_table(
+            ["VS/source prop", "Reason"],
+            [
+                ["_PictType", "encoded/source frame type; not valid after filtering"],
+                ["RepeatField", "MPEG/pulldown/source flag; not valid after filtering"],
+                ["TopFieldFirst", "MPEG/source flag; use _FieldBased for processing field order instead"],
+            ],
+        )
+
+    def _print_suggested_updated_precheck_call(
+        failures: list[str],
+        existing_overrides: dict[str, int],
+    ) -> None:
+        print("Suggested updated precheck call:")
+        print("")
+        print("cnr2_bm3d_precheck_video_file(")
+        print("    source_filename,")
+        for prop, value in existing_overrides.items():
+            if prop == "_FieldBased":
+                print(
+                    f"    override_FieldBased={value},   # existing override: {_meaning_for_prop(prop, value)}"
+                )
+            else:
+                override_name = "override" + prop
+                print(
+                    f"    {override_name}={value},   # existing override: {_meaning_for_prop(prop, value)}"
+                )
+        if any("_FieldBased" in failure for failure in failures):
+            print("    # _FieldBased is missing or indeterminate.")
+            print("    # Inspect the source video and choose the correct value.")
+            print("    # Valid override_FieldBased values:")
+            print("    #   0 = progressive")
+            print("    #   1 = interlaced BFF, Bottom Field First")
+            print("    #   2 = interlaced TFF, Top Field First")
+            print("    override_FieldBased=?,   # replace ? with the correct value for this video")
+        for prop in ["_Matrix", "_Range", "_Primaries", "_Transfer", "_ChromaLocation"]:
+            if any(prop in failure for failure in failures):
+                override_name = "override" + prop
+                print(f"    # {prop} is missing or indeterminate.")
+                if prop == "_Range":
+                    print("    # Valid override_Range values:")
+                    print("    #   0 = limited / TV range")
+                    print("    #   1 = full / PC range")
+                elif prop == "_Matrix":
+                    print("    # Common override_Matrix values:")
+                    print("    #   1 = BT.709")
+                    print("    #   5 = BT.470BG / PAL SD")
+                    print("    #   6 = BT.601 / ST170M / NTSC SD")
+                elif prop == "_Primaries":
+                    print("    # Common override_Primaries values:")
+                    print("    #   1 = BT.709")
+                    print("    #   5 = BT.470BG")
+                    print("    #   6 = BT.601 / ST170M")
+                    print("    #   9 = BT.2020")
+                elif prop == "_Transfer":
+                    print("    # Common override_Transfer values:")
+                    print("    #   1 = BT.709")
+                    print("    #   5 = BT.470BG")
+                    print("    #   6 = BT.601 / ST170M")
+                    print("    #   13 = sRGB")
+                elif prop == "_ChromaLocation":
+                    print("    # Valid override_ChromaLocation values:")
+                    print("    #   0 = left")
+                    print("    #   1 = center")
+                    print("    #   2 = top-left")
+                    print("    #   3 = top")
+                    print("    #   4 = bottom-left")
+                    print("    #   5 = bottom")
+                print(f"    {override_name}=?,   # replace ? with the correct value for this video")
+
+        print(")")
+
+    # ---------------------------------------------------------------------
+    # Start of actual precheck logic.
+    # ---------------------------------------------------------------------
+    overrides = _validate_overrides()
+    _print_heading("cnr2_bm3d_precheck_video_file()")
+    print(f"Source: {source_filename}")
+    print("Purpose: Inspect source-file metadata, first-frame VapourSynth properties, and vstools heuristics.")
+    print("         Print recommended SetFrameProps() code to apply before calling cnr2_bm3d().")
+
+    # ---------------------------------------------------------------------
+    # Set 1: pymediainfo metadata translated to VS properties where possible.
+    # ---------------------------------------------------------------------
+    try:
+        media_info = MediaInfo.parse(source_filename)
+        video_track = _lookup_video_track(media_info)
+    except Exception as e:
+        raise RuntimeError(
+            "cnr2_bm3d_precheck_video_file: pymediainfo could not inspect "
+            f"the source file: {type(e).__name__}: {e}"
+        ) from e
+    scan_type = getattr(video_track, "scan_type", None)
+    scan_order = getattr(video_track, "scan_order", None)
+    mediainfo_props: dict[str, Any] = {}
+    mediainfo_props["_FieldBased"] = _scan_type_to_preliminary_field_based(scan_type, scan_order)
+    mediainfo_props["_Matrix"] = _map_mediainfo_matrix(
+        getattr(video_track, "matrix_coefficients", None)
+    )
+    mediainfo_props["_Primaries"] = _map_mediainfo_primaries(
+        getattr(video_track, "color_primaries", None)
+    )
+    mediainfo_props["_Transfer"] = _map_mediainfo_transfer(
+        getattr(video_track, "transfer_characteristics", None)
+    )
+    mediainfo_props["_Range"] = _map_mediainfo_range(
+        getattr(video_track, "color_range", None)
+    )
+    par = _parse_positive_fraction(getattr(video_track, "pixel_aspect_ratio", None))
+    if par is not None:
+        mediainfo_props["_SARNum"], mediainfo_props["_SARDen"] = par
+    _print_section("[1] pymediainfo source metadata")
+    table1_rows: list[list[Any]] = []
+    def _add_mediainfo_row(
+        source_field: str,
+        source_value: Any,
+        vs_prop: str,
+        vs_value: Any,
+        notes: str,
+    ) -> None:
+        table1_rows.append([
+            source_field,
+            _safe_str(source_value),
+            vs_prop,
+            vs_value,
+            notes,
+        ])
+    _add_mediainfo_row(
+        "scan_type",
+        scan_type,
+        "_FieldBased",
+        mediainfo_props["_FieldBased"],
+        "source scan type",
+    )
+    _add_mediainfo_row(
+        "scan_order",
+        scan_order,
+        "_FieldBased",
+        mediainfo_props["_FieldBased"] if mediainfo_props["_FieldBased"] in (0, 1, 2) else UNKNOWN,
+        "field order / pulldown indicator",
+    )
+    _add_mediainfo_row("standard", getattr(video_track, "standard", None), OMIT, OMIT, "PAL/NTSC context")
+    _add_mediainfo_row("format", getattr(video_track, "format", None), OMIT, OMIT, "source codec/container info")
+    _add_mediainfo_row("codec_id", getattr(video_track, "codec_id", None), OMIT, OMIT, "source codec id")
+    _add_mediainfo_row("width", getattr(video_track, "width", None), OMIT, OMIT, "pixels")
+    _add_mediainfo_row("height", getattr(video_track, "height", None), OMIT, OMIT, "pixels")
+    _add_mediainfo_row("frame_rate", getattr(video_track, "frame_rate", None), OMIT, OMIT, "frames per second")
+    _add_mediainfo_row("framerate_num", getattr(video_track, "framerate_num", None), OMIT, OMIT, "fps numerator")
+    _add_mediainfo_row("framerate_den", getattr(video_track, "framerate_den", None), OMIT, OMIT, "fps denominator")
+    _add_mediainfo_row("color_space", getattr(video_track, "color_space", None), OMIT, OMIT, "source colour family")
+    _add_mediainfo_row("chroma_subsampling", getattr(video_track, "chroma_subsampling", None), OMIT, OMIT, "source chroma subsampling")
+    _add_mediainfo_row("bit_depth", getattr(video_track, "bit_depth", None), OMIT, OMIT, "source bit depth")
+    _add_mediainfo_row("matrix_coefficients", getattr(video_track, "matrix_coefficients", None), "_Matrix", mediainfo_props["_Matrix"], _meaning_for_prop("_Matrix", mediainfo_props["_Matrix"]))
+    _add_mediainfo_row("color_primaries", getattr(video_track, "color_primaries", None), "_Primaries", mediainfo_props["_Primaries"], _meaning_for_prop("_Primaries", mediainfo_props["_Primaries"]))
+    _add_mediainfo_row("transfer_characteristics", getattr(video_track, "transfer_characteristics", None), "_Transfer", mediainfo_props["_Transfer"], _meaning_for_prop("_Transfer", mediainfo_props["_Transfer"]))
+    _add_mediainfo_row("color_range", getattr(video_track, "color_range", None), "_Range", mediainfo_props["_Range"], _meaning_for_prop("_Range", mediainfo_props["_Range"]))
+    _add_mediainfo_row("pixel_aspect_ratio", getattr(video_track, "pixel_aspect_ratio", None), "_SARNum/_SARDen", f"{mediainfo_props.get('_SARNum', UNKNOWN)}/{mediainfo_props.get('_SARDen', UNKNOWN)}", "sample aspect ratio")
+    _add_mediainfo_row("display_aspect_ratio", getattr(video_track, "display_aspect_ratio", None), OMIT, OMIT, "display aspect ratio")
+    _print_table(
+        ["Source field", "Source value", "VS prop", "VS value", "Meaning / notes"],
+        table1_rows,
+    )
+
+    # ---------------------------------------------------------------------
+    # Set 2: BestSource first-frame props.
+    # ---------------------------------------------------------------------
+    clip = None
+    frame = None
+    bestsource_track = None
+    frame_props: dict[str, Any] = {}
+    clip_timing: dict[str, Any] = {
+        "FPS": UNKNOWN,
+        "fps_num": UNKNOWN,
+        "fps_den": UNKNOWN,
+        "frames": UNKNOWN,
+    }
+    try:
+        clip, bestsource_track = _try_open_bestsource_first_video_track(source_filename)
+        if clip is not None:
+            frame = clip.get_frame(0)
+            frame_props = _props_from_frame(frame)
+            frame_props.update(_duration_props_from_clip(clip))
+
+            clip_timing = {
+                "FPS": _format_fps(clip.fps_num, clip.fps_den),
+                "fps_num": clip.fps_num,
+                "fps_den": clip.fps_den,
+                "frames": clip.num_frames,
+            }
+    finally:
+        pass
+    _print_section("[2] BestSource first-frame VapourSynth properties")
+    if clip is None or frame is None:
+        print("BestSource diagnostic open failed or was unavailable.")
+    else:
+        print(f"BestSource video track used for diagnostic open: {bestsource_track}")
+        table2_rows = []
+
+        for prop in RECOMMENDED_COPY_PROPS:
+            if prop in frame_props:
+                value = frame_props[prop]
+                table2_rows.append([prop, value, _meaning_for_prop(prop, value)])
+
+        for prop in SOURCE_CODEC_FLAGS_NOT_RECOMMENDED:
+            if prop in frame.props:
+                table2_rows.append([
+                    prop,
+                    frame.props[prop],
+                    "source/codec flag; not recommended to copy",
+                ])
+        _print_table(["VS prop", "VS value", "Meaning / notes"], table2_rows)
+        print("Clip timing from BestSource:")
+        _print_table(
+            ["Timing field", "Value"],
+            [
+                ["FPS", clip_timing["FPS"]],
+                ["fps_num", clip_timing["fps_num"]],
+                ["fps_den", clip_timing["fps_den"]],
+                ["frames", clip_timing["frames"]],
+            ],
+        )
+
+    # ---------------------------------------------------------------------
+    # Set 3: BLENDED preliminary properties before vstools heuristics.
+    # ---------------------------------------------------------------------
+    blended_props: dict[str, Any] = {}
+    # Start with frame props where available and meaningful.
+    for prop, value in frame_props.items():
+        if not _is_unspecified_prop(prop, value):
+            blended_props[prop] = value
+    # Overlay pymediainfo where it can provide a recognised or deliberately
+    # partial source-level value. This intentionally beats BestSource for
+    # _FieldBased because BestSource can report progressive for AVI captures
+    # that MediaInfo reports as interlaced.
+    for prop, value in mediainfo_props.items():
+        if _is_known(value) or value == PARTIAL:
+            blended_props[prop] = value
+    # Apply user overrides before heuristics. This gives heuristics the best
+    # available preliminary clip properties.
+    for prop, value in overrides.items():
+        blended_props[prop] = value
+    _print_section("[3] BLENDED preliminary properties before vstools heuristics")
+    table3_rows = []
+    for prop in RECOMMENDED_COPY_PROPS:
+        value = blended_props.get(prop, UNKNOWN)
+        source_note = "available"
+        if prop in overrides:
+            source_note = "user override"
+        elif prop in mediainfo_props and (mediainfo_props[prop] == value or mediainfo_props[prop] == PARTIAL):
+            source_note = "from pymediainfo / source metadata"
+        elif prop in frame_props and frame_props[prop] == value:
+            source_note = "from BestSource first-frame prop"
+        elif value == UNKNOWN:
+            source_note = "not reported or not determined"
+        table3_rows.append([prop, value, source_note])
+    _print_table(["VS prop", "VS value", "Source / notes"], table3_rows)
+    print("Clip timing:")
+    _print_table(
+        ["Timing field", "Value"],
+        [
+            ["FPS", clip_timing["FPS"]],
+            ["fps_num", clip_timing["fps_num"]],
+            ["fps_den", clip_timing["fps_den"]],
+            ["frames", clip_timing["frames"]],
+        ],
+    )
+
+    # ---------------------------------------------------------------------
+    # Set 4: vstools.video_heuristics() after applying known blended props.
+    # ---------------------------------------------------------------------
+    heuristics_props: dict[str, Any] = {}
+    assumed_props: list[str] = []
+    prepared_clip = None
+    try:
+        if clip is not None:
+            props_to_apply = _known_props_only(blended_props)
+            if props_to_apply:
+                prepared_clip = core.std.SetFrameProps(clip, **props_to_apply)
+            else:
+                prepared_clip = clip
+            heuristics_props, assumed_props = _run_vstools_heuristics(prepared_clip)
+    finally:
+        pass
+    _print_section("[4] vstools.video_heuristics() after applying known BLENDED preliminary props")
+    if not heuristics_props:
+        print("No vstools heuristic properties were available.")
+    else:
+        table4_rows = []
+        for prop in ["_Matrix", "_Range", "_Primaries", "_Transfer", "_ChromaLocation"]:
+            if prop in heuristics_props:
+                note = _meaning_for_prop(prop, heuristics_props[prop])
+                if prop in assumed_props:
+                    note = f"{note}; assumed by heuristics"
+                table4_rows.append([prop, heuristics_props[prop], note])
+        _print_table(["VS prop", "VS value", "Meaning / notes"], table4_rows)
+    if assumed_props:
+        print(f"vstools assumed props: {assumed_props}")
+    print("Clip timing:")
+    _print_table(
+        ["Timing field", "Value"],
+        [
+            ["FPS", clip_timing["FPS"]],
+            ["fps_num", clip_timing["fps_num"]],
+            ["fps_den", clip_timing["fps_den"]],
+            ["frames", clip_timing["frames"]],
+        ],
+    )
+
+    # ---------------------------------------------------------------------
+    # Set 5: final recommended props.
+    # ---------------------------------------------------------------------
+    final_props = dict(blended_props)
+    # Use heuristics to repair/fill colour/range/chroma values. User overrides
+    # are applied again afterwards so explicit caller choices always win.
+    for prop in ["_Matrix", "_Range", "_Primaries", "_Transfer", "_ChromaLocation"]:
+        if prop in heuristics_props:
+            final_props[prop] = heuristics_props[prop]
+    for prop, value in overrides.items():
+        final_props[prop] = value
+    failures: list[str] = []
+    if final_props.get("_FieldBased") == "pulldown":
+        failures.append(
+            "Source appears to be progressive telecine / 2:3 pulldown. "
+            "Use IVTC/field matching before cnr2_bm3d, or use denoising only."
+        )
+    elif final_props.get("_FieldBased") == PARTIAL:
+        failures.append(
+            "_FieldBased is indeterminate: source is interlaced but field order "
+            "is not reported or not recognised."
+        )
+    elif not _is_known(final_props.get("_FieldBased")):
+        failures.append("_FieldBased is missing or indeterminate.")
+
+    for prop in ["_Matrix", "_Range", "_Primaries", "_Transfer"]:
+        if not _is_known(final_props.get(prop)):
+            failures.append(f"{prop} is missing or indeterminate.")
+
+    chroma_subsampling = getattr(video_track, "chroma_subsampling", None)
+    if chroma_subsampling is not None and "4:2:0" in str(chroma_subsampling):
+        if not _is_known(final_props.get("_ChromaLocation")):
+            failures.append(
+                "_ChromaLocation is missing or indeterminate for a 4:2:0 source."
+            )
+    ready = not failures
+    _print_section("")
+    _print_setframeprops_block(final_props, ready=ready)
+
+    # ---------------------------------------------------------------------
+    # Section 6: final result and next steps.
+    # ---------------------------------------------------------------------
+    _print_section("[6] PRECHECK RESULT")
+    if ready:
+        print("PASS")
+        print("Recommended properties were generated.")
+        print("Next steps:")
+        print("  1. Review the SetFrameProps() block in section [5].")
+        print("  2. Copy it into your real .vpy after opening the source.")
+        print("  3. Comment out or remove the cnr2_bm3d_precheck_video_file() call.")
+        print("  4. Call cnr2_bm3d() on the prepared clip.")
+    else:
+        print("FAIL")
+        print("Problems found:")
+        for failure in failures:
+            print(f"  - {failure}")
+        print("What to do next:")
+        print("  1. Inspect the source video and determine the correct missing value(s).")
+        print("  2. Re-run this precheck with only the necessary override_* value(s).")
+        print("  3. Repeat until this precheck passes.")
+        print("  4. When it passes:")
+        print("       - comment out the cnr2_bm3d_precheck_video_file() call")
+        print("       - copy/review the SetFrameProps() block from section [5]")
+        print("       - apply that SetFrameProps() block to your real clip before calling cnr2_bm3d()")
+        print("")
+        _print_suggested_updated_precheck_call(failures, overrides)
+    _print_reference_tables()
+
+    # ---------------------------------------------------------------------
+    # Cleanup of temporary diagnostic clip/frame references.
+    # ---------------------------------------------------------------------
+    del frame
+    del prepared_clip
+    del clip
+    gc.collect()
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Output frame property helpers
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -542,15 +1486,32 @@ def _check_dependencies(deinterlace: bool, deinterlace_quality: str) -> None:
     """
     if not _HAS_VSTOOLS:
         raise RuntimeError(
-            "cnr2_bm3d: missing required Python dependency vstools.\n"
+            "Missing dependency for heuristics, vsjetpack vstools.\n"
             "  Install it into this portable Python with:\n"
-            "  pip install vsjetpack"
+            "     python.exe -m pip install vsjetpack"
+        )
+    if not _HAS_PYMEDIAINFO:
+        raise RuntimeError(
+            "cnr2_bm3d_precheck_video_file: missing Python dependency pymediainfo.\n"
+            "  Install it into this portable Python with:\n"
+            "     python.exe -m pip install pymediainfo"
+        )
+    if not hasattr(core, "bs"):
+        raise RuntimeError(
+            "Missing required VapourSynth plugin bestsource.\n"
+            "  Install it into this portable Python with:\n"
+            "     python.exe -m pip install BestSource"
+        )
+    if not hasattr(core.bs, "VideoSource"):
+        raise RuntimeError(
+            "bestsource plugin is loaded, but core.bs.VideoSource "
+            "is unavailable."
         )
     if not hasattr(core, "fmtc"):
         raise RuntimeError(
             "cnr2_bm3d: missing required VapourSynth plugin fmtconv.\n"
             "  Install it into this portable Python with:\n"
-            "  pip install vapoursynth-fmtconv"
+            "     python.exe -m install vapoursynth-fmtconv"
         )
     if not hasattr(core.fmtc, "resample"):
         raise RuntimeError(
@@ -566,7 +1527,7 @@ def _check_dependencies(deinterlace: bool, deinterlace_quality: str) -> None:
         raise RuntimeError(
             "cnr2_bm3d: missing required VapourSynth plugin bm3dcpu.\n"
             "  Install it into this portable Python with:\n"
-            "  pip install vapoursynth-bm3dcpu"
+            "     python.exe -m install vapoursynth-bm3dcpu"
         )
     if not hasattr(core.bm3dcpu, "BM3Dv2"):
         raise RuntimeError(
