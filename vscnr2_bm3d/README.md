@@ -1,225 +1,104 @@
-```
-Replacement for Vapoursynth CNR2 chroma denoising, using bm3dcpu for chroma denoising and bwdif for deinterlacing.    
-    - Intended for use with chroma-noisey VHS captures eg for VHS-C home movies.    
-    - Defaults to chroma-only denoising, with optional LUMA denoising via sigma_luma.    
-    - Handles both progressive and interlaced (PAL/NTSC) YUV sources.    
-    - For interlaced sources, fields are separated by parity (TFF/BFF), denoised independently, then rewoven before optional bwdif deinterlacing.    
-    - Use bm3dcpu for denoising    
-    - Use bwdif for optional deinterlacing and furthermore optional doubling of output framerate    
+# vscnr2_bm3d
 
-***************************************************************************************************
-CRITICAL NOTES - READ THIS BEFORE CONTINUING
---------------------------------------------
-VHS capture files OFTEN have missing, incomplete, incorrect, or
-ambiguous metadata.  This is ESPECIALLY COMMON with AVI captures,
-lossless captures, DVD/VOB/MPEG sources, and files produced by
-older capture workflows and USB hadrware viseo capture devices.
+Replacement for VapourSynth CNR2-style chroma denoising, using `bm3dcpu` for chroma denoising and optional `bwdif` / `bwdif+znedi3` deinterlacing.    
+- Intended for chroma-noisy VHS / VHS-C / analogue captures, especially home movies.
+- Defaults to **chroma-only** denoising.
+- Supports optional luma denoising via `sigma_luma`.
+- Handles progressive and interlaced PAL/NTSC YUV sources.
+- For interlaced sources, fields are separated by parity (TFF/BFF), denoised independently, rewoven, then optionally deinterlaced.
+- Uses `bm3dcpu` for denoising.
+- Uses `bwdif` for optional deinterlacing with optional framerate doubled deinterlacing.
+- When `deinterlace_quality="enhanced"`, uses optional `znedi3` as `bwdif`'s `edeint` helper .
 
-For cnr2_bm3d, the most critical source properties are:
-    - whether the source is progressive or interlaced
-    - if interlaced, whether it is top-field-first (TFF) or bottom-field-first (BFF)
-    - whether the source is actually telecine / 2:3 pulldown rather than normal interlaced video
-    - colour matrix, range, primaries, transfer, chroma location, and aspect ratio signalling
+---
 
-Wrong metadata or wrong clip frame properties will almost certainly produce wrong output.
+## CRITICAL NOTES - READ THIS BEFORE CONTINUING
+
+VHS capture files **notoriously often** have missing, incomplete, incorrect, or ambiguous metadata.
+This is especially common with AVI captures, lossless captures, DVD/VOB/MPEG sources,
+and files produced by older capture workflows or USB video capture devices.
+
+For `cnr2_bm3d()`, the most critical source properties are:    
+- whether the source is progressive or interlaced;
+- if interlaced, whether it is bottom-field-first (BFF) or top-field-first (TFF);
+- whether the source is actually telecine / 2:3 pulldown rather than normal interlaced video;
+- colour matrix, range, primaries, transfer, chroma location, and aspect-ratio signalling.
+
+Wrong metadata or wrong clip frame properties will ALMOST CERTAINLY produce wrong output.
 
 In particular, deinterlacing with the wrong field order can damage motion,
-create judder, or produce visually incorrect output.  Telecine / 2:3 pulldown
-material should instead be handled with inverse telecine / field matching,
-not with denoising/deinterlacing here.
+create judder, or produce visually incorrect output.
+Telecine / 2:3 pulldown material should normally be handled with
+inverse telecine / field matching, not with `bwdif` deinterlacing here.
 
-1. RECOMMENDED SAFE WORKFLOW
-----------------------------
-    precheck_metadata = cnr2_bm3d_precheck_video_file(source_filename)
-    clip = open_the_source_with_your_preferred_source_filter_eg_bestsource(source_filename)
-    clip = cnr2_bm3d(clip, precheck_metadata=precheck_metadata, ... )
+---
 
-The precheck step inspects the original video file metadata before the source
-filter turns it into a VapourSynth clip.
+## RECOMMENDED SAFE WORKFLOW
 
-If the source is interlaced and the precheck can determine field order, the
-precheck metadata will record the recommended field order:
-    recommended_tff=True     # top-field-first
-    recommended_tff=False    # bottom-field-first
+The recommended workflow is now:    
 
-If the source is interlaced but the precheck cannot determine whether it is
-TFF or BFF, then the precheck will fail deliberately.  This is intentional.
-Guessing field order is unsafe.
+Identify and ensure perfect clip properties.    
+Iterate these steps until `cnr2_bm3d_precheck_video_file()` reports PASS:    
+1. with vapoursynth vspipe run a normal .vpy script containing `cnr2_bm3d_precheck_video_file(the_source_filename)`.
+2. Review its diagnostic report. 
+3. Follow any suggestions to edit the call to `cnr2_bm3d_precheck_video_file()` with new override settings.
 
-To continue, inspect the source, determine the correct field order, then pass
-the override to the precheck function:
-    precheck_metadata = cnr2_bm3d_precheck_video_file(source_filename, tff=True, ...) # for TFF
-or:
-    precheck_metadata = cnr2_bm3d_precheck_video_file(source_filename, tff=True, ...) # for BFF
+When `cnr2_bm3d_precheck_video_file()` reports a PASS:    
+4. Copy/review the suggested `core.std.SetFrameProps()` block.
+5. In the .vpy script comment-out the call to `cnr2_bm3d_precheck_video_file()`.
+6. Ensure the script opens the source clip normally, eg via `bestsource` or whatever source filter you like.
+6. Paste/check/edit in the recommended code `SetFrameProps()` copied from the diagnostic report to immediately above a call to `cnr2_bm3d` to apply correct properties to the video clip.
+7. Call `cnr2_bm3d()` on the clip which now has correct properties applied to it (which `cnr2_bm3d()` relies on).
 
-Then pass the same field-order override to cnr2_bm3d():
-    clip = cnr2_bm3d(clip, precheck_metadata=precheck_metadata, tff=True, ... ) # explicit override; wins over metadata
+The precheck helper is a **diagnostic-only helper**. 
+It deliberately stops the VapourSynth script after printing its report. 
+This is intentional. 
+It prevents the script from continuing into real processing while the precheck is still active.
 
-When tff is supplied directly to cnr2_bm3d(), that explicit value takes priority
-over precheck metadata and clip frame properties and fills in missing metadata.
+Example .vpy script:
 
-2. LESS SAFE WORKFLOW
----------------------
-If precheck_metadata is not supplied, for example:
-    clip = open_the_source_with_your_preferred_source_filter_eg_bestsource(source_filename)
-    clip = do_some_stuff(clip)
-    clip = cnr2_bm3d(clip, precheck_metadata=None, ... )
+```python
+import vapoursynth as vs
+core = vs.core
 
-then the input clip itself IS REQUIRED to have correct VapourSynth frame
-properties set, either because the source filter set them correctly or because
-you the caller explicitly set them BEFORE calling cnr2_bm3d().
+#import ... your other things
 
-At minimum, the following frame properties MUST be correct where applicable:
-    _FieldBased       0 = progressive, 1 = BFF interlaced, 2 = TFF interlaced
-    _Matrix           colour matrix
-    _Range            0 = limited/TV range, 1 = full/PC range
-    _Primaries        colour primaries
-    _Transfer         transfer characteristics
-    _ChromaLocation   chroma sample location, especially for 4:2:0 sources
-    _SARNum           sample aspect ratio numerator
-    _SARDen           sample aspect ratio denominator
+from vscnr2_bm3d import cnr2_bm3d_precheck_video_file, cnr2_bm3d
 
-For interlaced sources, _FieldBased is especially important.  If the clip is
-interlaced but _FieldBased is missing or wrong, specify either tff=True or
-tff=False explicitly in the call to cnr2_bm3d().
+source_filename = r"D:\TEST\my_vhs_capture.avi"
 
-If deinterlace=True is requested and the script cannot determine a safe field
-order from precheck_metadata, frame properties, or an explicit tff override, it
-will raise an error rather than guessing.
+# Step 1: run this first.
+# This prints a diagnostic report and deliberately stops the script.
+# Per the process above, you will eventuallt comment-out this call.
+cnr2_bm3d_precheck_video_file(source_filename)
 
-3. Telecine / 2:3 pulldown sources
-----------------------------------
-If the precheck detects progressive telecine / 2:3 pulldown material, bwdif
-deinterlacing is definitely not the correct operation for this clip.
-Use an inverse-telecine / field-matching workflow before calling cnr2_bm3d().
-***************************************************************************************************
+# Step 2: after iteratively reviewing the precheck output, comment out the precheck call above.
 
-Main Function:
-    def cnr2_bm3d(
-        clip: vs.VideoNode,
-        sigma_uv: float = 3.5,
-        sigma_luma: float = 0.0,                # OPTIONAL TO DENOISE LUMA, 0.0=preserve luma, >0.0=optional luma denoise
-        radius: int = 1,                        # 0=spatial only, 1-9=temporal window
-        full_quality_denoise: bool = True,      # Run two BM3Dv2 passes (Wiener refinement) for high quality which is Slower
-        #--- Override auto-detection ONLY if you know better:
-        matrix: Optional[str] = None,           # NORMALLY DO NOT SPECIFY THIS e.g. "470bg", "601", "709" - None = auto
-        limited: Optional[bool] = None,         # NORMALLY DO NOT SPECIFY THIS True=TV range, False=PC - None = auto
-        tff: Optional[bool] = None,             # NORMALLY DO NOT SPECIFY THIS True=TFF, False=BFF - None = auto
-        #---
-        # Deinterlace after processing?
-        deinterlace: bool = False,              # requires vapoursynth-bwdif
-        deinterlace_rate: str = "same",         # eg "same"=25i->25p, "double"=25i->50p
-        deinterlace_quality: str = "standard",  # "standard"=bwdif, "enhanced"=bwdif+znedi3 via edeint
-        # Debug
-        show_info: bool = False,                # print detected ClipInfo before processing
-    ) -> vs.VideoNode:
+# Step 3: open the source however you prefer. (bestsource example here)
+clip = core.bs.VideoSource(source_filename)
 
-    Args:
-        clip:         Input YUV clip. Any bit depth and subsampling.
-        sigma_uv:     Chroma denoising strength. ~3.5 ≈ CNR2 defaults.
-        sigma_luma:   Optional LUMA denoising strength.
-                      0.0 preserves LUMA from the source clip, matching the
-                      original chroma-only CNR2 behaviour.
-                      Use LUMA denoising cautiously because it is much more
-                      visually obvious than chroma denoising.
-                      Suggested starting values:
-                          0.0 = preserve LUMA exactly
-                          0.5 = very light LUMA denoise
-                          1.0 = light LUMA denoise
-                          2.0 = moderate LUMA denoise; use cautiously
-        radius:       Temporal radius. 0=spatial only, 1+=temporal (default).
-                      This wrapper allows 0..9, pragmatically use 1-4 only.
-                      For old VHS chroma denoising, radius 1 and 2 are likely the
-                      practical values with 3 and 4 as safety headroom.
-                      With field-split interlaced, each unit of radius spans
-                      one same-parity field = one full interlaced frame.
-        full_quality_denoise: Run two BM3Dv2 passes (Wiener refinement). Slower
-                      but meaningfully better quality. Recommended for
-                      final encodes.
-        matrix:       Override detected colour matrix. None = auto-detect.
-        limited:      Override detected range. None = auto-detect.
-        tff:          Override detected field order. None = auto-detect.
-                      PAL VHS is almost universally TFF.
-        deinterlace:  If True, run bwdif deinterlacer on the rewoven interlaced output.
-                      Requires vapoursynth-bwdif installed.
-        deinterlace_rate:
-                      Only used when deinterlace=True.
-                      "same"   = same-rate progressive output, e.g. 25i -> 25p or 29.97i -> 29.97p.
-                      "double" = double-rate progressive output, e.g. 25i -> 50p or 29.97i -> 59.94p.
-                      Case is ignored, so "Same", "SAME", "Double", and "DOUBLE" are accepted.
-        deinterlace_quality:
-                      Only used when deinterlace=True.
-                      "standard" = normal bwdif deinterlacing.
-                      "enhanced" = bwdif with a znedi3 edeint helper
-                                   for higher-quality spatial prediction.
-                      Case is ignored, so "Standard", "STANDARD", "Enhanced", and "ENHANCED" are accepted.
-        show_info:    If True, print the detected ClipInfo before processing.
-                      Useful for verifying auto-detection on a new source.
-Notes:
-    Handles both progressive and interlaced (PAL/NTSC) sources automatically.
-    For interlaced sources, 
-        - fields are separated by parity (TFF/BFF)
-        - each same-parity stream is denoised independently (so temporal comparisons are always between same-parity fields)
-        - the streams are rewoven back to interlaced
-        - optionally deinterlaces with bwdif afterwards, 
-          either to same-rate progressive output or double-rate progressive output.
-    Format, matrix, range and field-order properties are auto-detected
-    from frame properties (via vstools when available), with reasonable PAL fallbacks
-    for VHS/SD content (<=576 lines -> 470bg matrix, limited range, TFF).
-
-Dependencies:
-    vapoursynth R76+
-    pymediainfo           (pip install pymediainfo)          - for info about video sources
-    vsjetpack             (pip install vsjetpack)            - for vstools stuff including video_heuristics()
-    fmtconv               (pip install vapoursynth-fmtconv)  - for format conversions
-    vapoursynth-bm3dcpu   (pip install vapoursynth-bm3dcpu)  - for chroma denoising and optional luma denoising
-    vapoursynth-bwdif     (pip install vapoursynth-bwdif)    - for optional de3interlacing
-
-Assumptions:
-    The following dll files are auto-loaded by vapoursynth:
-        vapoursynth\plugins\bwdif.dll
-        vapoursynth\plugins\fmtconv.dll
-        vapoursynth\plugins\bm3dcpu\manifest.vs
-        vapoursynth\plugins\bm3dcpu\bm3dcpu.dll
-        vapoursynth\plugins\bm3dcpu\bm3dcpu.zn4.dll
-
-Usage examples: - PAL VHS 720x576 25i YUV420P8
-
-1. To inspect what was detected before committing to a run:
-    print(inspect_input_clip(clip))
-
-2. Or, pass show_info=True to cnr2_bm3d to see it inline.
-
-3. Then, your own concoction based on these examples:
-
-## LIGHT chroma-only denoise
-## interlaced output, gentle chroma clean-up, single BM3D pass
-light = cnr2_bm3d(
+# Step 4: paste/review the SetFrameProps() block recommended by the precheck.
+# Example only. Use the values printed for your actual source.
+clip = core.std.SetFrameProps(
     clip,
-    sigma_uv=1.5,
-    radius=1,
-    full_quality_denoise=False,
-    deinterlace=False,   # stay interlaced; deinterlace downstream in your own pipeline if you need
-    show_info=True,      # print detected properties on first call for verification
+    _FieldBased=1,       # BFF
+    _Matrix=5,           # BT470_BG
+    _Range=0,            # LIMITED
+    _Primaries=5,        # BT470_BG
+    _Transfer=5,         # BT470_BG
+    _ChromaLocation=0,   # LEFT
+    _SARNum=16,
+    _SARDen=15,
+    _DurationNum=1,
+    _DurationDen=25,
 )
 
-## LIGHT chroma with light OPTIONAL LUMA DENOISE AS WELL
-## interlaced output, gentle chroma clean-up, single BM3D pass
-light = cnr2_bm3d(
-    clip,
-    sigma_uv=1.5,
-    sigma_luma=0.5,      # do optional light LUMA denoising as well
-    radius=1,
-    full_quality_denoise=False,
-    deinterlace=False,   # stay interlaced; deinterlace downstream in your own pipeline if you need
-    show_info=True,      # print detected properties on first call for verification
-)
-
-## MEDIUM - approximately CNR2 defaults
-## deliver progressive output via bwdif
-medium = cnr2_bm3d(
+# Step 5: now run the real cnr2_bm3d processing. 
+# Refer to the README.md for help and examples of light,medium,heavy settings
+clip = cnr2_bm3d(
     clip,
     sigma_uv=3.5,
+    sigma_luma=0.0,
     radius=1,
     full_quality_denoise=True,
     deinterlace=True,
@@ -227,40 +106,353 @@ medium = cnr2_bm3d(
     deinterlace_quality="standard",
 )
 
-## MEDIUM - approximately CNR2 chroma defaults
-## with medium OPTIONAL LUMA DENOISE AS WELL
-## deliver progressive output via bwdif
+clip.set_output()
+```
+
+---
+
+## What the precheck helper `cnr2_bm3d_precheck_video_file()` does
+
+```python
+def cnr2_bm3d_precheck_video_file(
+    source_filename: str,
+    *,
+    override_FieldBased: Optional[int] = None,
+    override_Matrix: Optional[int] = None,
+    override_Range: Optional[int] = None,
+    override_Primaries: Optional[int] = None,
+    override_Transfer: Optional[int] = None,
+    override_ChromaLocation: Optional[int] = None,
+    override_SARNum: Optional[int] = None,
+    override_SARDen: Optional[int] = None,
+    override_DurationNum: Optional[int] = None,
+    override_DurationDen: Optional[int] = None,
+    override_Rotation: Optional[int] = None,
+    override_FlipHorizontal: Optional[int] = None,
+    override_FlipVertical: Optional[int] = None,
+) -> None:
+```
+
+The precheck helper:    
+- inspects source-file metadata using `pymediainfo`;
+- opens the file briefly with BestSource and reads the first frame's VapourSynth properties;
+- blends available MediaInfo, BestSource, and user override values;
+- runs `vstools.video_heuristics()` after applying known blended preliminary properties;
+- prints a suggested `core.std.SetFrameProps()` block;
+- prints relevant VapourSynth property value references;
+- deliberately stops the script when finished.
+
+The precheck helper `cnr2_bm3d_precheck_video_file()` is **not** a part of the
+runtime filtering chain to process any video. It is simply a means to determine
+what your video clip properties really are and what must be applied to maximize
+chances of success.  Fell free to skip it at your own risk.
+
+---
+
+## If the precheck cannot determine a mandatory property
+
+If the precheck `cnr2_bm3d_precheck_video_file()` finds missing or indeterminate mandatory information,
+it will print `FAIL` and suggest an updated call parameters using one or more `override_*` values.
+This process iterates until success or you give up on your video.
+
+For example, many AVI captures are reported as interlaced but do not report field order.
+In that case, the precheck may ask you to inspect the source and rerun with the correct `_FieldBased` value:
+```python
+cnr2_bm3d_precheck_video_file(
+    source_filename,
+    # _FieldBased is missing or indeterminate.
+    # Inspect the source video and choose the correct value.
+    # Valid override_FieldBased values:
+    #   0 = PROGRESSIVE
+    #   1 = BFF
+    #   2 = TFF
+    override_FieldBased=1,   # replace with the correct value for this video
+)
+
+```
+
+The usual methods of inpecting video clips to determinf characteristics applies.
+Perhaps google it, or ask on https://www.videohelp.com/ or https://forum.doom9.org/
+
+Use an override parameter only after you have determined the correct value. Do not guess field order.
+
+Once the precheck passes, copy/review its suggested `SetFrameProps()` block, 
+follow the process above , then run the real vpy script.
+
+---
+
+## Less safe workflow
+
+You may skip `cnr2_bm3d_precheck_video_file()` at your own risk,
+assuming the input clip itself already has  correct VapourSynth frame properties
+set by the source filter or by your script before calling `cnr2_bm3d()`.
+
+At minimum, the following frame properties should be correct where applicable:
+
+```text
+_FieldBased       0 = progressive, 1 = BFF interlaced, 2 = TFF interlaced
+_Matrix           colour matrix
+_Range            0 = limited/TV range, 1 = full/PC range
+_Primaries        colour primaries
+_Transfer         transfer characteristics
+_ChromaLocation   chroma sample location, especially for 4:2:0 sources
+_SARNum           sample aspect ratio numerator
+_SARDen           sample aspect ratio denominator
+_DurationNum      frame duration numerator
+_DurationDen      frame duration denominator
+```
+
+For interlaced sources, `_FieldBased` is especially important.
+
+If `deinterlace=True` is requested and the script cannot determine a safe field order,
+it will fail rather than guessing.
+
+---
+
+## Telecine / 2:3 pulldown sources
+
+If the precheck detects progressive telecine / 2:3 pulldown material, 
+`bwdif` deinterlacing is not the correct operation for that clip.
+
+Use an inverse-telecine / field-matching workflow before calling `cnr2_bm3d()`, 
+or use `cnr2_bm3d()` only for denoising after the clip has been prepared appropriately.
+
+---
+
+## Main function cnr2_bm3d()
+
+```python
+def cnr2_bm3d(
+    clip: vs.VideoNode,
+    sigma_uv: float = 3.5,
+    sigma_luma: float = 0.0,
+    radius: int = 1,
+    full_quality_denoise: bool = True,
+    matrix: Optional[str] = None,
+    limited: Optional[bool] = None,
+    tff: Optional[bool] = None,
+    deinterlace: bool = False,
+    deinterlace_rate: str = "same",
+    deinterlace_quality: str = "standard",
+    show_info: bool = False,
+) -> vs.VideoNode:
+```
+
+### Arguments
+
+`clip`  
+Input YUV clip. Any bit depth and subsampling.
+
+`sigma_uv`  
+Chroma denoising strength. Around `3.5` is a practical CNR2-like starting point.
+
+`sigma_luma`  
+Optional luma denoising strength.
+
+- `0.0` preserves luma from the source clip, matching the original chroma-only CNR2 behaviour.
+- `0.5` = very light luma denoise.
+- `1.0` = light luma denoise.
+- `2.0` = moderate luma denoise; use cautiously.
+
+Luma denoising is visually much more obvious than chroma denoising.
+
+`radius`  
+Temporal radius. `0` = spatial only, `1+` = temporal. The wrapper allows `0..9`, but for old VHS chroma denoising, practical values are usually `1` or `2`, with `3` and `4` as experimental headroom.
+
+With field-split interlaced sources, each unit of radius spans one same-parity field, equivalent to one full interlaced frame.
+
+`full_quality_denoise`  
+If `True`, runs two BM3Dv2 passes with Wiener refinement. Slower but better quality. Recommended for final encodes.
+
+`matrix`, `limited`, `tff`  
+Manual overrides for old workflows. The preferred safe workflow is now to set correct frame properties before calling `cnr2_bm3d()` using the precheck-generated `SetFrameProps()` block.
+
+- `matrix=None` = auto-detect from clip properties / heuristics.
+- `limited=None` = auto-detect from clip properties / heuristics.
+- `tff=None` = auto-detect from `_FieldBased` where possible.
+
+Only specify these if you know the clip properties are wrong and you understand the override.
+
+`deinterlace`  
+If `True`, run `bwdif` deinterlacing on the rewoven interlaced output.
+
+`deinterlace_rate`  
+Only used when `deinterlace=True`.
+
+- `"same"` = same-rate progressive output, e.g. `25i -> 25p` or `29.97i -> 29.97p`.
+- `"double"` = double-rate progressive output, e.g. `25i -> 50p` or `29.97i -> 59.94p`.
+
+Case is ignored.
+
+`deinterlace_quality`  
+Only used when `deinterlace=True`.
+
+- `"standard"` = normal `bwdif` deinterlacing.
+- `"enhanced"` = `bwdif` with a `znedi3` `edeint` helper for higher-quality spatial prediction.
+
+Case is ignored.
+
+`show_info`  
+If `True`, prints the detected `ClipInfo` before processing. Useful for checking what `cnr2_bm3d()` sees at runtime.
+
+---
+
+## Notes
+
+The function handles progressive and interlaced PAL/NTSC sources.
+
+For interlaced sources:
+
+- fields are separated by parity;
+- each same-parity stream is denoised independently;
+- temporal comparisons are always between same-parity fields;
+- fields are rewoven back to interlaced;
+- optional deinterlacing with `bwdif` can then be applied.
+
+For normal interlaced PAL VHS, TFF is common, but do not blindly assume it for every capture chain. Some DVD/VOB/MPEG material may be BFF, as the precheck can show.
+
+---
+
+## Dependencies
+
+```text
+VapourSynth R76+
+pymediainfo                   pip install pymediainfo
+vsjetpack / vstools           pip install vsjetpack
+BestSource                    pip install BestSource
+vapoursynth-fmtconv           pip install vapoursynth-fmtconv
+vapoursynth-bm3dcpu           pip install vapoursynth-bm3dcpu
+vapoursynth-bwdif             pip install vapoursynth-bwdif
+vapoursynth-znedi3            pip install vapoursynth-znedi3
+```
+
+The precheck helper `cnr2_bm3d_precheck_video_file()` requires `pymediainfo`, `BestSource`, and `vstools`.
+
+The main denoising function requires `fmtconv` and `bm3dcpu`.
+
+Deinterlacing requires `vapoursynth-bwdif`.
+
+Enhanced deinterlacing requires `vapoursynth-znedi3`.
+
+---
+
+## Plugin autoload assumptions
+
+The relevant DLL/plugin files are expected to be auto-loaded by VapourSynth, for example:
+
+```text
+vapoursynth\plugins\bwdif.dll
+vapoursynth\plugins\fmtconv.dll
+vapoursynth\plugins\znedi3.dll
+vapoursynth\plugins\bm3dcpu\manifest.vs
+vapoursynth\plugins\bm3dcpu\bm3dcpu.dll
+vapoursynth\plugins\bm3dcpu\bm3dcpu.zn4.dll
+```
+
+Exact paths may differ depending on your (possibly portable) VapourSynth layout.
+
+---
+
+## Usage examples
+
+### Example 1 - Run precheck first
+
+```python
+import vapoursynth as vs
+core = vs.core
+
+from vscnr2_bm3d import cnr2_bm3d_precheck_video_file
+
+source_filename = r"D:\TEST\my_vhs_capture.avi"
+
+cnr2_bm3d_precheck_video_file(source_filename)
+
+# The precheck deliberately stops the script.
+# Review the printed report, copy/review the suggested SetFrameProps() block,
+# comment out this precheck call, then run the real processing script.
+```
+
+### Example 2 - Light chroma-only denoise, keep interlaced
+
+```python
+light = cnr2_bm3d(
+    clip,
+    sigma_uv=1.5,
+    sigma_luma=0.0,
+    radius=1,
+    full_quality_denoise=False,
+    deinterlace=False,
+    show_info=True,
+)
+```
+
+### Example 3 - Light chroma plus very light luma denoise, keep interlaced
+
+```python
+light = cnr2_bm3d(
+    clip,
+    sigma_uv=1.5,
+    sigma_luma=0.5,
+    radius=1,
+    full_quality_denoise=False,
+    deinterlace=False,
+    show_info=True,
+)
+```
+
+### Example 4 - Medium CNR2-like chroma denoise, same-rate progressive output
+
+```python
 medium = cnr2_bm3d(
     clip,
     sigma_uv=3.5,
-    sigma_luma=1.0,      # do optional medium LUMA denoising as well
+    sigma_luma=0.0,
+    radius=1,
+    full_quality_denoise=True,
+    deinterlace=True,
+    deinterlace_rate="same",
+    deinterlace_quality="standard",
+)
+```
+
+### Example 5 - Medium chroma plus light luma denoise, enhanced deinterlacing
+
+```python
+medium = cnr2_bm3d(
+    clip,
+    sigma_uv=3.5,
+    sigma_luma=1.0,
     radius=1,
     full_quality_denoise=True,
     deinterlace=True,
     deinterlace_rate="same",
     deinterlace_quality="enhanced",
 )
+```
 
-## HEAVY - badly degraded VHS tape, wider temporal window
-## deliver progressive output via bwdif
+### Example 6 - Heavy chroma denoise, double-rate progressive output
+
+```python
 heavy = cnr2_bm3d(
     clip,
     sigma_uv=8.0,
-    radius=2,             # 5 same-parity fields per output field (~200ms context)
+    sigma_luma=0.0,
+    radius=2,
     full_quality_denoise=True,
     deinterlace=True,
     deinterlace_rate="double",
     deinterlace_quality="standard",
 )
+```
 
-## HEAVY - badly degraded VHS tape, wider temporal window
-## with heavy OPTIONAL LUMA DENOISE AS WELL
-## deliver progressive output via bwdif
+### Example 7 - Heavy chroma plus moderate luma denoise, enhanced double-rate deinterlacing
+
+```python
 heavy = cnr2_bm3d(
     clip,
     sigma_uv=8.0,
-    sigma_luma=2.0,       # do optional heavy LUMA denoising as well
-    radius=2,             # 5 same-parity fields per output field (~200ms context)
+    sigma_luma=2.0,
+    radius=2,
     full_quality_denoise=True,
     deinterlace=True,
     deinterlace_rate="double",
