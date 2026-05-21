@@ -10,9 +10,10 @@ Replacement for Vapoursynth CNR2 chroma denoising, using bm3dcpu for chroma deno
 ***************************************************************************************************
 CRITICAL NOTES - READ THIS BEFORE CONTINUING
 --------------------------------------------
-VHS capture files often have missing, incomplete, incorrect, or ambiguous
-metadata.  This is especially common with AVI captures, lossless captures,
-DVD/VOB/MPEG sources, and files produced by older capture workflows.
+VHS capture files OFTEN have missing, incomplete, incorrect, or
+ambiguous metadata.  This is ESPECIALLY COMMON with AVI captures,
+lossless captures, DVD/VOB/MPEG sources, and files produced by
+older capture workflows and USB hadrware viseo capture devices.
 
 For cnr2_bm3d, the most critical source properties are:
     - whether the source is progressive or interlaced
