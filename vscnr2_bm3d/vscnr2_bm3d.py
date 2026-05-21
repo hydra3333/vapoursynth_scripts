@@ -1010,7 +1010,12 @@ def cnr2_bm3d_precheck_video_file(
     # Final output helpers
     # ------------------------------------------------------------------
 
-    def _print_setframeprops_block(final_props: dict[str, Any], ready: bool) -> None:
+    def _print_setframeprops_block(
+        final_props: dict[str, Any],
+        ready: bool,
+        width: Any,
+        height: Any,
+    ) -> None:
         if ready:
             print("[5] Suggested SetFrameProps() code - ready to review and copy")
         else:
@@ -1021,7 +1026,15 @@ def cnr2_bm3d_precheck_video_file(
         if not ready:
             print("# This block is not valid Python until all ? placeholders are replaced.")
         print("")
+        if suggested_dar != UNKNOWN:
+            print(f"    # Derived DAR for readability: {suggested_dar}")
         print("clip = core.std.SetFrameProps(")
+        suggested_dar = _derive_dar_from_sar(
+            width,
+            height,
+            final_props.get("_SARNum", None),
+            final_props.get("_SARDen", None),
+        )
         print("    clip,")
         for prop in RECOMMENDED_COPY_PROPS:
             value = final_props.get(prop, UNKNOWN)
@@ -1358,6 +1371,12 @@ def cnr2_bm3d_precheck_video_file(
         for prop, value in mediainfo_props.items():
             if _is_known(value) or value in {PARTIAL, PULLDOWN}:
                 blended_props[prop] = value
+        # Prefer exact SAR frame props from the opened VapourSynth clip when present.
+        # MediaInfo often reports decimal PAR such as 1.067, which becomes 1067/1000.
+        # BestSource may expose cleaner exact DVD/VapourSynth values, e.g. 16/15.
+        for prop in ["_SARNum", "_SARDen"]:
+            if prop in frame_props and _is_known(frame_props[prop]):
+                blended_props[prop] = frame_props[prop]
         # Apply user overrides before heuristics so heuristics see the best
         # available preliminary clip props.
         for prop, value in overrides.items():
@@ -1380,6 +1399,12 @@ def cnr2_bm3d_precheck_video_file(
                 source_note = "not reported or not determined"
             table3_rows.append([prop, value, source_note])
         _print_table(["VS prop", "VS value", "Source / notes"], table3_rows)
+        blended_derived_dar = _derive_dar_from_sar(
+            getattr(video_track, "width", None),
+            getattr(video_track, "height", None),
+            blended_props.get("_SARNum", None),
+            blended_props.get("_SARDen", None),
+        )
         print("Clip timing:")
         _print_table(
             ["Timing field", "Value"],
@@ -1388,6 +1413,8 @@ def cnr2_bm3d_precheck_video_file(
                 ["fps_num", clip_timing["fps_num"]],
                 ["fps_den", clip_timing["fps_den"]],
                 ["frames", clip_timing["frames"]],
+                ["derived_DAR", blended_derived_dar],
+
             ],
         )
         heuristics_props: dict[str, Any] = {}
@@ -1414,6 +1441,12 @@ def cnr2_bm3d_precheck_video_file(
             _print_table(["VS prop", "VS value", "Meaning / notes"], table4_rows)
         if assumed_props:
             print(f"vstools assumed props: {assumed_props}")
+        heuristic_input_dar = _derive_dar_from_sar(
+            getattr(video_track, "width", None),
+            getattr(video_track, "height", None),
+            blended_props.get("_SARNum", None),
+            blended_props.get("_SARDen", None),
+        )
         print("Clip timing:")
         _print_table(
             ["Timing field", "Value"],
@@ -1422,6 +1455,7 @@ def cnr2_bm3d_precheck_video_file(
                 ["fps_num", clip_timing["fps_num"]],
                 ["fps_den", clip_timing["fps_den"]],
                 ["frames", clip_timing["frames"]],
+                ["derived_DAR", heuristic_input_dar],
             ],
         )
         final_props = dict(blended_props)
@@ -1460,8 +1494,16 @@ def cnr2_bm3d_precheck_video_file(
                 )
         ready = not failures
         _print_section("")
-        _print_setframeprops_block(final_props, ready=ready)
+        _print_setframeprops_block(
+            final_props,
+            ready=ready,
+            width=getattr(video_track, "width", None),
+            height=getattr(video_track, "height", None),
+        )
         _print_section("[6] PRECHECK RESULT")
+        precheck_stop_message = (
+            "cnr2_bm3d_precheck_video_file: diagnostic precheck complete."
+        )
         if ready:
             print("PASS")
             print("Recommended properties were generated.")
@@ -1469,7 +1511,13 @@ def cnr2_bm3d_precheck_video_file(
             print("  1. Review the SetFrameProps() block in section [5].")
             print("  2. Copy it into your real .vpy after opening the source.")
             print("  3. Comment out or remove the cnr2_bm3d_precheck_video_file() call.")
-            print("  4. Call cnr2_bm3d() on the prepared clip.")
+            print("  4. Re-run the script and call cnr2_bm3d() on the prepared clip.")
+            print("  5. This precheck will deliberately stop the script now.")
+            precheck_stop_message = (
+                "cnr2_bm3d_precheck_video_file: PASS; diagnostic precheck complete. "
+                "Review/copy the SetFrameProps() block, comment out this precheck call, "
+                "then re-run the real script."
+            )
         else:
             print("FAIL")
             print("Problems found:")
@@ -1485,8 +1533,13 @@ def cnr2_bm3d_precheck_video_file(
             print("       - apply that SetFrameProps() block to your real clip before calling cnr2_bm3d()")
             print("")
             _print_suggested_updated_precheck_call(failures, overrides)
-
+            precheck_stop_message = (
+                "cnr2_bm3d_precheck_video_file: FAIL; diagnostic precheck complete. "
+                "Fix missing/indeterminate values with override_* arguments, rerun the precheck, "
+                "and do not continue to cnr2_bm3d() yet."
+            )
         _print_reference_tables()
+        raise RuntimeError(precheck_stop_message)
     finally:
         # Minimise lingering references to temporary diagnostic objects.  The
         # actual file/source lifetime is controlled by the VapourSynth source
