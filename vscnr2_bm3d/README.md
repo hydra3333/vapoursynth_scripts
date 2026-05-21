@@ -1,4 +1,4 @@
-# vscnr2_bm3d
+# vscnr2_bm3d (UNDER DEVELOPMENT)
 
 Replacement for VapourSynth CNR2-style chroma denoising, using `bm3dcpu` for chroma denoising and optional `bwdif` / `bwdif+znedi3` deinterlacing.    
 - Intended for chroma-noisy VHS / VHS-C / analogue captures, especially home movies.
