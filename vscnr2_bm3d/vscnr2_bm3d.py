@@ -68,20 +68,10 @@ Main Function:
                       Case is ignored, so "Standard", "STANDARD", "Enhanced", and "ENHANCED" are accepted.
         show_info:    If True, print the detected ClipInfo before processing.
                       Useful for verifying auto-detection on a new source.
-Notes:
-    Handles both progressive and interlaced (PAL/NTSC) sources automatically.
-    For interlaced sources, 
-        - fields are separated by parity (TFF/BFF)
-        - each same-parity stream is denoised independently (so temporal comparisons are always between same-parity fields)
-        - the streams are rewoven back to interlaced
-        - optionally deinterlaces with bwdif afterwards, 
-          either to same-rate progressive output or double-rate progressive output.
-    Format, matrix, range and field-order properties are auto-detected
-    from frame properties (via vstools when available), with reasonable PAL fallbacks
-    for VHS/SD content (<=576 lines -> 470bg matrix, limited range, TFF).
 
 Dependencies:
     vapoursynth R76+
+    pymediainfo           (pip install pymediainfo)          - for info about video sources
     vsjetpack             (pip install vsjetpack)            - for vstools stuff including video_heuristics()
     fmtconv               (pip install vapoursynth-fmtconv)  - for format conversions
     vapoursynth-bm3dcpu   (pip install vapoursynth-bm3dcpu)  - for chroma denoising and optional luma denoising
@@ -95,89 +85,6 @@ Assumptions:
         vapoursynth\plugins\bm3dcpu\bm3dcpu.dll
         vapoursynth\plugins\bm3dcpu\bm3dcpu.zn4.dll
 
-Usage examples: - PAL VHS 720x576 25i YUV420P8
-
-1. To inspect what was detected before committing to a run:
-    print(inspect_input_clip(clip))
-
-2. Or, pass show_info=True to cnr2_bm3d to see it inline.
-
-3. Then, your own concoction based on these examples:
-
-## LIGHT chroma-only denoise
-## interlaced output, gentle chroma clean-up, single BM3D pass
-light = cnr2_bm3d(
-    clip,
-    sigma_uv=1.5,
-    radius=1,
-    full_quality_denoise=False,
-    deinterlace=False,   # stay interlaced; deinterlace downstream in your own pipeline if you need
-    show_info=True,      # print detected properties on first call for verification
-)
-
-## LIGHT chroma with light OPTIONAL LUMA DENOISE AS WELL
-## interlaced output, gentle chroma clean-up, single BM3D pass
-light = cnr2_bm3d(
-    clip,
-    sigma_uv=1.5,
-    sigma_luma=0.5,      # do optional light LUMA denoising as well
-    radius=1,
-    full_quality_denoise=False,
-    deinterlace=False,   # stay interlaced; deinterlace downstream in your own pipeline if you need
-    show_info=True,      # print detected properties on first call for verification
-)
-
-## MEDIUM - approximately CNR2 defaults
-## deliver progressive output via bwdif
-medium = cnr2_bm3d(
-    clip,
-    sigma_uv=3.5,
-    radius=1,
-    full_quality_denoise=True,
-    deinterlace=True,
-    deinterlace_rate="same",
-    deinterlace_quality="standard",
-)
-
-## MEDIUM - approximately CNR2 chroma defaults
-## with medium OPTIONAL LUMA DENOISE AS WELL
-## deliver progressive output via bwdif
-medium = cnr2_bm3d(
-    clip,
-    sigma_uv=3.5,
-    sigma_luma=1.0,      # do optional medium LUMA denoising as well
-    radius=1,
-    full_quality_denoise=True,
-    deinterlace=True,
-    deinterlace_rate="same",
-    deinterlace_quality="enhanced",
-)
-
-## HEAVY - badly degraded VHS tape, wider temporal window
-## deliver progressive output via bwdif
-heavy = cnr2_bm3d(
-    clip,
-    sigma_uv=8.0,
-    radius=2,             # 5 same-parity fields per output field (~200ms context)
-    full_quality_denoise=True,
-    deinterlace=True,
-    deinterlace_rate="double",
-    deinterlace_quality="standard",
-)
-
-## HEAVY - badly degraded VHS tape, wider temporal window
-## with heavy OPTIONAL LUMA DENOISE AS WELL
-## deliver progressive output via bwdif
-heavy = cnr2_bm3d(
-    clip,
-    sigma_uv=8.0,
-    sigma_luma=2.0,       # do optional heavy LUMA denoising as well
-    radius=2,             # 5 same-parity fields per output field (~200ms context)
-    full_quality_denoise=True,
-    deinterlace=True,
-    deinterlace_rate="double",
-    deinterlace_quality="enhanced",
-)
 """
 
 from __future__ import annotations
