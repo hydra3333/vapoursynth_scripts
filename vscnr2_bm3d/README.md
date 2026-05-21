@@ -168,6 +168,7 @@ Notes:
 
 Dependencies:
     vapoursynth R76+
+    pymediainfo           (pip install pymediainfo)          - for info about video sources
     vsjetpack             (pip install vsjetpack)            - for vstools stuff including video_heuristics()
     fmtconv               (pip install vapoursynth-fmtconv)  - for format conversions
     vapoursynth-bm3dcpu   (pip install vapoursynth-bm3dcpu)  - for chroma denoising and optional luma denoising
