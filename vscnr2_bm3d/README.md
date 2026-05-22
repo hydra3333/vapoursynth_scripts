@@ -41,9 +41,10 @@ clip = core.std.SetFrameProps(
 
 ---
 
-### CRITICAL NOTES - READ THIS BEFORE CONTINUING
+## ⚠️ CRITICAL NOTES - READ THIS BEFORE CONTINUING
 
-VHS capture files **notoriously often** have missing, incomplete, incorrect, or ambiguous metadata.
+> [!WARNING]
+> VHS capture files **notoriously often** have missing, incomplete, incorrect, or ambiguous metadata.
 This is especially common with AVI captures, lossless captures, DVD/VOB/MPEG sources,
 and files produced by older capture workflows or USB video capture devices.
 
@@ -164,8 +165,6 @@ def cnr2_bm3d_precheck_video_file(
     override_ChromaLocation: Optional[int] = None,
     override_SARNum: Optional[int] = None,
     override_SARDen: Optional[int] = None,
-    override_DurationNum: Optional[int] = None,
-    override_DurationDen: Optional[int] = None,
     override_Rotation: Optional[int] = None,
     override_FlipHorizontal: Optional[int] = None,
     override_FlipVertical: Optional[int] = None,
@@ -237,8 +236,6 @@ _Transfer         transfer characteristics
 _ChromaLocation   chroma sample location, especially for 4:2:0 sources
 _SARNum           sample aspect ratio numerator
 _SARDen           sample aspect ratio denominator
-_DurationNum      frame duration numerator
-_DurationDen      frame duration denominator
 ```
 
 For interlaced sources, `_FieldBased` is especially important.
