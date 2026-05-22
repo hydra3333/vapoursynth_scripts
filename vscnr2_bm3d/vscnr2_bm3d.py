@@ -771,6 +771,7 @@ def cnr2_bm3d_precheck_video_file(
             .strip()
             .lower()
             .replace(".", "")
+            .replace(":", "")
             .replace("-", "")
             .replace("_", "")
             .replace("/", "")
@@ -785,7 +786,22 @@ def cnr2_bm3d_precheck_video_file(
             return int(FieldBased.BFF)
         if text in {"tff", "topfieldfirst", "topfirst"}:
             return int(FieldBased.TFF)
-        if "23pulldown" in text or "232pulldown" in text:
+        # MediaInfo may report telecine/pulldown scan order in several forms,
+        # including "2:3 Pulldown", "3:2 Pulldown", "2-3 Pulldown",
+        # "3-2 Pulldown", "23 Pulldown", or similar.  Treat these as
+        # progressive telecine/pulldown, not as ordinary interlaced video.
+        #
+        # This deliberately returns PULLDOWN rather than a field order because
+        # normal bwdif deinterlacing is not the right operation for this kind
+        # of source.  The precheck should tell the user to use IVTC/field
+        # matching first, or denoise only after preparing the clip.
+        #if "pulldown" in text and (
+        #    "23" in text
+        #    or "32" in text
+        #    or "232" in text
+        #    or "323" in text
+        #):
+        if "pulldown" in text:
             return PULLDOWN
         return UNKNOWN
 
