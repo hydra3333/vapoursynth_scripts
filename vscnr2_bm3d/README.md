@@ -498,3 +498,33 @@ heavy = cnr2_bm3d(
     deinterlace_quality="enhanced",
 )
 ```
+
+#### Example 8 - wild heavy chroma issues
+
+```python
+heavy = cnr2_bm3d(
+    clip,
+    sigma_uv=16.0,
+    sigma_luma=16.0,
+    radius=2,
+    full_quality_denoise=True,
+    deinterlace=True,
+    deinterlace_rate="double",
+    deinterlace_quality="enhanced",
+)
+```
+
+#### Example 9 - wild heavy chroma issues and wild heavy luma issues for real shockers of VHS captures 
+
+```python
+heavy = cnr2_bm3d(
+    clip,
+    sigma_uv=16.0,
+    sigma_luma=16.0,
+    radius=2,
+    full_quality_denoise=True,
+    deinterlace=True,
+    deinterlace_rate="double",
+    deinterlace_quality="enhanced",
+)
+```
