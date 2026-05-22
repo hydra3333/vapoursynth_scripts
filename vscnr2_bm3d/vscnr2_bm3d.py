@@ -1971,39 +1971,54 @@ def _to_444ps(clip: vs.VideoNode, info: ClipInfo) -> vs.VideoNode:
     """
     Convert any YUV integer clip -> YUV444PS for BM3D.
 
-    Uses fmtc.resample for chroma upsampling (better placement than
-    core.resize for 4:2:0 -> 4:4:4), then fmtc.bitdepth for float
+    Uses fmtc.resample for chroma upsampling, then fmtc.bitdepth for float
     conversion with range handling.
 
-    After SeparateFields the clip is progressive 720x288, so no interlaced
-    chroma placement adjustments are needed.
+    BM3D processing is done in full-range 32-bit float 4:4:4.  The original
+    format is restored later by _from_444ps().
     """
     fmt = clip.format
     if fmt is None:
         raise ValueError("_to_444ps: clip must have a constant (non-variable) format")
-    # Step 1: chroma upsampling to 4:4:4 (integer, same bit depth)
+
+    # Step 1: chroma upsampling to 4:4:4, still in the source integer format.
+    #
+    # spline36 is fmtconv's documented default resampling kernel and is a good
+    # neutral high-quality choice for chroma resampling.  Avoid sharper kernels
+    # such as Lanczos by default because old analogue/VHS material can already
+    # contain ringing, noise, and unstable chroma edges.
     if fmt.subsampling_w > 0 or fmt.subsampling_h > 0:
         clip = core.fmtc.resample(
             clip,
             css="444",
-            kernel="bicubic", a1=0, a2=0.5,  # Catmull-Rom
+            kernel="spline36",
             fulls=not info.limited,
             fulld=not info.limited,
         )
-    # Step 2: integer -> 32-bit float, re-encoding limited -> full range
+
+    # Step 2: integer -> 32-bit float, re-encoding limited -> full range.
     clip = core.fmtc.bitdepth(
-        clip, bits=32, flt=True,
+        clip,
+        bits=32,
+        flt=True,
         fulls=not info.limited,
-        fulld=True,   # BM3D always works in full-range float internally
+        fulld=True,   # BM3D always works in full-range float internally.
     )
+
     if clip.format.id != vs.YUV444PS:
         clip = core.resize.Point(clip, format=vs.YUV444PS)
+
     return clip
 
 def _from_444ps(clip: vs.VideoNode, info: ClipInfo) -> vs.VideoNode:
     """
     Convert YUV444PS float back to the original clip format,
     using the same ClipInfo that drove _to_444ps.
+
+    Keep all chroma resampling in float and perform the final bit-depth/range
+    conversion last.  This is important because fmtc.resample may otherwise
+    promote low-bitdepth clips to 16-bit output.  The returned clip should
+    match the input clip's original VapourSynth format id.
     """
     fmt_target = core.get_video_format(info._fmt_id)
 
@@ -2013,23 +2028,44 @@ def _from_444ps(clip: vs.VideoNode, info: ClipInfo) -> vs.VideoNode:
             "VapourSynth core.get_video_format()"
         )
 
-    # Step 1: float -> target bit depth with range re-encoding
-    clip = core.fmtc.bitdepth(
-        clip,
-        bits=fmt_target.bits_per_sample,
-        flt=1 if fmt_target.sample_type == vs.FLOAT else 0,
-        fulls=True,           # source (444PS) is full range
-        fulld=not info.limited,
-    )
-    # Step 2: chroma downsampling if needed
+    # Step 1: chroma downsampling if needed, while still full-range float.
+    #
+    # Keep this before the final bit-depth conversion so that the last step
+    # decides the final integer bit depth.  This avoids returning YUV422P16
+    # when the original input was YUV422P8.
     if fmt_target.subsampling_w > 0 or fmt_target.subsampling_h > 0:
         clip = core.fmtc.resample(
             clip,
             css=_fmtconv_css_from_format(fmt_target),
-            kernel="bicubic", a1=0, a2=0.5,
-            fulls=not info.limited,
-            fulld=not info.limited,
+            kernel="spline36",
+            fulls=True,   # source (444PS) is full-range float
+            fulld=True,   # keep full-range float until final bitdepth step
         )
+
+    # Step 2: float -> original target bit depth and range.
+    #
+    # This final step restores the source clip's bit depth/sample type and
+    # converts from BM3D's internal full-range float back to the user's
+    # original limited/full range convention.
+    clip = core.fmtc.bitdepth(
+        clip,
+        bits=fmt_target.bits_per_sample,
+        flt=1 if fmt_target.sample_type == vs.FLOAT else 0,
+        fulls=True,           # source is still full-range float
+        fulld=not info.limited,
+    )
+
+    # Final safety check.  The wrapper's default contract is to return the same
+    # VapourSynth format as the input clip unless a future explicit option says
+    # otherwise.  If this fails, comparison scripts and downstream processing
+    # will see surprising format changes.
+    if clip.format is None or clip.format.id != info._fmt_id:
+        raise RuntimeError(
+            "cnr2_bm3d: internal format restore failed. "
+            f"Expected output format id {info._fmt_id}, "
+            f"got {clip.format.id if clip.format is not None else 'variable/unknown'}."
+        )
+
     return clip
 
 # -----------------------------------------------------------------------------
