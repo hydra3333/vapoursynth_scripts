@@ -1011,6 +1011,7 @@ def cnr2_bm3d_precheck_video_file(
         ready: bool,
         width: Any,
         height: Any,
+        required_missing_props: set[str],
     ) -> None:
         if ready:
             _print_stderr("[5] Suggested SetFrameProps() code - ready to review and copy")
@@ -1035,6 +1036,14 @@ def cnr2_bm3d_precheck_video_file(
         for prop in RECOMMENDED_COPY_PROPS:
             value = final_props.get(prop, UNKNOWN)
             if not _is_known(value):
+                # Only print placeholders for properties that are genuinely
+                # required before this precheck can be considered ready.
+                # Unknown optional properties are deliberately omitted from
+                # the suggested SetFrameProps() block to keep the generated
+                # code copyable when the precheck can otherwise PASS.
+                if prop not in required_missing_props:
+                    continue
+
                 if prop == "_FieldBased":
                     _print_stderr("    _FieldBased=?,       # REQUIRED: inspect the source video and choose the correct")
                     _print_stderr("                         # override_FieldBased value in cnr2_bm3d_precheck_video_file().")
@@ -1455,27 +1464,34 @@ def cnr2_bm3d_precheck_video_file(
         for prop, value in overrides.items():
             final_props[prop] = value
         failures: list[str] = []
+        required_missing_props: set[str] = set()
         if final_props.get("_FieldBased") == PULLDOWN:
+            required_missing_props.add("_FieldBased")
             failures.append(
                 "_FieldBased is not applicable: source appears to be progressive "
                 "telecine / 2:3 pulldown. Use IVTC/field matching before "
                 "cnr2_bm3d, or use denoising only."
             )
         elif final_props.get("_FieldBased") == PARTIAL:
+            required_missing_props.add("_FieldBased")
             failures.append(
                 "_FieldBased is indeterminate: source is interlaced but field "
                 "order is not reported or not recognised."
             )
         elif not _is_known(final_props.get("_FieldBased")):
+            required_missing_props.add("_FieldBased")
             failures.append("_FieldBased is missing or indeterminate.")
+
         for prop in ["_Matrix", "_Range", "_Primaries", "_Transfer"]:
             value = final_props.get(prop)
             if not _is_known(value) or _is_unspecified_prop(prop, value):
+                required_missing_props.add(prop)
                 failures.append(f"{prop} is missing, unspecified, or indeterminate.")
         chroma_subsampling = getattr(video_track, "chroma_subsampling", None)
         if chroma_subsampling is not None and "4:2:0" in str(chroma_subsampling):
             value = final_props.get("_ChromaLocation")
             if not _is_known(value):
+                required_missing_props.add("_ChromaLocation")
                 failures.append(
                     "_ChromaLocation is missing or indeterminate for a 4:2:0 source."
                 )
@@ -1486,6 +1502,7 @@ def cnr2_bm3d_precheck_video_file(
             ready=ready,
             width=getattr(video_track, "width", None),
             height=getattr(video_track, "height", None),
+            required_missing_props=required_missing_props,
         )
         _print_section("[6] PRECHECK RESULT")
         precheck_stop_message = (
