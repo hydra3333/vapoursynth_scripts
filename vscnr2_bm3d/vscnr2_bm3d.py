@@ -1481,12 +1481,18 @@ def cnr2_bm3d_precheck_video_file(
             final_props[prop] = value
         failures: list[str] = []
         required_missing_props: set[str] = set()
-        if final_props.get("_FieldBased") == PULLDOWN:
-            required_missing_props.add("_FieldBased")
+        is_pulldown_source = final_props.get("_FieldBased") == PULLDOWN
+        if is_pulldown_source:
             failures.append(
                 "_FieldBased is not applicable: source appears to be progressive "
                 "telecine / 2:3 pulldown. Use IVTC/field matching before "
-                "cnr2_bm3d, or use denoising only."
+                "cnr2_bm3d, or use denoising only after preparing the clip."
+            )
+        elif final_props.get("_FieldBased") == PARTIAL:
+            required_missing_props.add("_FieldBased")
+            failures.append(
+                "_FieldBased is indeterminate: source is interlaced but field "
+                "order is not reported or not recognised."
             )
         elif final_props.get("_FieldBased") == PARTIAL:
             required_missing_props.add("_FieldBased")
@@ -1544,20 +1550,32 @@ def cnr2_bm3d_precheck_video_file(
             for failure in failures:
                 _print_stderr(f"  - {failure}")
             _print_stderr("What to do next:")
-            _print_stderr("  1. Inspect the source video and determine the correct missing value(s).")
-            _print_stderr("  2. Re-run this precheck with only the necessary override_* value(s).")
-            _print_stderr("  3. Repeat until this precheck passes.")
-            _print_stderr("  4. When it passes:")
-            _print_stderr("       - comment out the cnr2_bm3d_precheck_video_file() call")
-            _print_stderr("       - copy/review the SetFrameProps() block from section [5]")
-            _print_stderr("       - apply that SetFrameProps() block to your real clip before calling cnr2_bm3d()")
-            _print_stderr("")
-            _print_suggested_updated_precheck_call(failures, overrides)
-            precheck_stop_message = (
-                "cnr2_bm3d_precheck_video_file: FAIL; diagnostic precheck complete. "
-                "Fix missing/indeterminate values with override_* arguments, rerun the precheck, "
-                "and do not continue to cnr2_bm3d() yet."
-            )
+            if is_pulldown_source:
+                _print_stderr("  This source appears to be progressive telecine / pulldown material.")
+                _print_stderr("  Do not fix this by choosing override_FieldBased.")
+                _print_stderr("  Do not process this source as ordinary interlaced video with cnr2_bm3d().")
+                _print_stderr("  Use IVTC / field matching first, then run cnr2_bm3d() only after the clip has")
+                _print_stderr("  been prepared as normal progressive video, or use cnr2_bm3d() only for")
+                _print_stderr("  denoising after you have deliberately prepared the clip yourself.")
+                precheck_stop_message = (
+                    "cnr2_bm3d_precheck_video_file: FAIL; pulldown source detected. "
+                    "Use IVTC/field matching or otherwise prepare the clip before using cnr2_bm3d()."
+                )
+            else:
+                _print_stderr("  1. Inspect the source video and determine the correct missing value(s).")
+                _print_stderr("  2. Re-run this precheck with only the necessary override_* value(s).")
+                _print_stderr("  3. Repeat until this precheck passes.")
+                _print_stderr("  4. When it passes:")
+                _print_stderr("       - comment out the cnr2_bm3d_precheck_video_file() call")
+                _print_stderr("       - copy/review the SetFrameProps() block from section [5]")
+                _print_stderr("       - apply that SetFrameProps() block to your real clip before calling cnr2_bm3d()")
+                _print_stderr("")
+                _print_suggested_updated_precheck_call(failures, overrides)
+                precheck_stop_message = (
+                    "cnr2_bm3d_precheck_video_file: FAIL; diagnostic precheck complete. "
+                    "Fix missing/indeterminate values with override_* arguments, rerun the precheck, "
+                    "and do not continue to cnr2_bm3d() yet."
+                )
         _print_reference_tables()
         #raise RuntimeError(precheck_stop_message)
         _print_stderr("")
