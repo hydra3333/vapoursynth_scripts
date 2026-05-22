@@ -98,9 +98,6 @@ import shutil
 import tempfile
 import json
 from typing import List, Dict, Optional, Union
-from pydantic import BaseModel  # Standard for data validation
-import rich                     # For beautiful terminal output
-
 from dataclasses import dataclass
 from fractions import Fraction
 from typing import Any, Optional

@@ -1,4 +1,4 @@
-# vscnr2_bm3d (UNDER DEVELOPMENT)
+# vscnr2_bm3d
 
 Replacement for VapourSynth CNR2-style chroma denoising, using `bm3dcpu` for chroma denoising and optional `bwdif` / `bwdif+znedi3` deinterlacing.    
 - Intended for chroma-noisy VHS / VHS-C / analogue captures, especially home movies.
@@ -9,6 +9,35 @@ Replacement for VapourSynth CNR2-style chroma denoising, using `bm3dcpu` for chr
 - Uses `bm3dcpu` for denoising.
 - Uses `bwdif` for optional deinterlacing with optional framerate doubled deinterlacing.
 - When `deinterlace_quality="enhanced"`, uses optional `znedi3` as `bwdif`'s `edeint` helper .
+
+#### Notes and Limitations    
+
+Standard and Advanced vapoursynth users will likely instead choose to denoise chroma themselves using their own favoirite denoiser(s).
+
+Anamorphic PAL/NTSC DVD-style display aspect ratios are not automatically detected.
+For example, 720x576 PAL and 720x480 NTSC sources may be intended for 4:3 or 16:9 display, even when the stored frame dimensions suggest a different ratio.
+DAR is derived only from available metadata, thus Display Aspect Ratio (DAR) is calculated incorrectly for that ...
+so you may need to set or correct `_SARNum/_SARDen` yourself after denoising and before `set_output()`.    
+Common cases:  `DAR = (width * _SARNum) / (height * _SARDen)`    
+| Source type                     | Stored frame size | Intended DAR | _SARNum | _SARDen | Derived DAR calculation    |
+| ------------------------------- | ----------------: | -----------: | ------: | ------: | -------------------------- |
+| PAL 4:3                         |           720x576 |          4:3 |      16 |      15 | 720 / 576 * 16 / 15 = 4:3  |
+| PAL 16:9 anamorphic             |           720x576 |         16:9 |      64 |      45 | 720 / 576 * 64 / 45 = 16:9 |
+| NTSC 4:3                        |           720x480 |          4:3 |       8 |       9 | 720 / 480 * 8 / 9 = 4:3    |
+| NTSC 16:9 anamorphic            |           720x480 |         16:9 |      32 |      27 | 720 / 480 * 32 / 27 = 16:9 |
+| Square-pixel PAL storage ratio  |           720x576 |          5:4 |       1 |       1 | 720 / 576 * 1 / 1 = 5:4    |
+| Square-pixel NTSC storage ratio |           720x480 |          3:2 |       1 |       1 | 720 / 480 * 1 / 1 = 3:2    |
+```
+# Example: After denoising, set Frame properties on PAL 720x576 intended for 16:9 display.
+clip = core.std.SetFrameProps(
+    clip,
+    _SARNum=64,
+    _SARDen=45,
+)
+# _SARNum and _SARDen are VapourSynth frame properties.
+# Whether that aspect-ratio signalling is preserved in the final
+# encoded file depends on the output path, encoder, and container.
+```
 
 ---
 
@@ -35,49 +64,59 @@ inverse telecine / field matching, not with `bwdif` deinterlacing here.
 
 ### RECOMMENDED SAFE WORKFLOW
 
-The recommended workflow is now:    
+The recommended workflow is now:
 
-Identify and ensure perfect clip properties.    
-Iterate these steps until `cnr2_bm3d_precheck_video_file()` reports PASS:    
-1. with vapoursynth vspipe run a normal .vpy script containing `cnr2_bm3d_precheck_video_file(the_source_filename)`.
-2. Review its diagnostic report. 
-3. Follow any suggestions to edit the call to `cnr2_bm3d_precheck_video_file()` with new override settings.
+Identify and ensure correct clip properties BEFORE calling `cnr2_bm3d()`.
 
-When `cnr2_bm3d_precheck_video_file()` reports a PASS:    
-4. Copy/review the suggested `core.std.SetFrameProps()` block.
-5. In the .vpy script comment-out the call to `cnr2_bm3d_precheck_video_file()`.
-6. Ensure the script opens the source clip normally, eg via `bestsource` or whatever source filter you like.
-6. Paste/check/edit in the recommended code `SetFrameProps()` copied from the diagnostic report to immediately above a call to `cnr2_bm3d` to apply correct properties to the video clip.
-7. Call `cnr2_bm3d()` on the clip which now has correct properties applied to it (which `cnr2_bm3d()` relies on).
+First, run only the diagnostic precheck phase:    
+1. Create a normal `.vpy` script containing a call to `cnr2_bm3d_precheck_video_file(source_filename)`.
+2. Run the `.vpy` script with `vspipe`, eg `vspipe.bat test_precheck.vpy NUL >stdout.txt 2>stderr.txt`.
+3. Review the diagnostic report, eg in stderr.txt.
+4. Follow any suggestions to edit the call to `cnr2_bm3d_precheck_video_file()` with new `override_*` parameter settings.
+5. Repeat steps 2 to 4 until `cnr2_bm3d_precheck_video_file()` reports PASS.
 
-The precheck helper is a **diagnostic-only helper**. 
-It deliberately stops the VapourSynth script after printing its report. 
-This is intentional. 
+When `cnr2_bm3d_precheck_video_file()` reports PASS:    
+
+6. Copy/review the suggested `core.std.SetFrameProps()` block.
+7. Comment out or remove the `cnr2_bm3d_precheck_video_file()` call; put whatever else you need into the script.
+8. Ensure the script opens the source clip normally, eg with `BestSource` or whichever source filter you prefer.
+9. Paste/check/edit the suggested `SetFrameProps()` block immediately after opening the source clip.
+10. Call `cnr2_bm3d()` on the clip after the correct frame properties have been applied, before `set_output()`.
+
+The precheck helper is a **diagnostic-only helper**.
+It deliberately stops the VapourSynth script after printing its report.
+This is intentional.
 It prevents the script from continuing into real processing while the precheck is still active.
 
-Example .vpy script:
+Example `.vpy` script:
 
 ```python
 import vapoursynth as vs
 core = vs.core
 
 #import ... your other things
-
 from vscnr2_bm3d import cnr2_bm3d_precheck_video_file, cnr2_bm3d
-
 source_filename = r"D:\TEST\my_vhs_capture.avi"
 
-# Step 1: run this first.
-# This prints a diagnostic report and deliberately stops the script.
-# Per the process above, you will eventuallt comment-out this call.
+# -------------------------------------------------------------------------
+# Phase 1: diagnostic precheck.
+# Run this first. It prints a diagnostic report and deliberately stops the
+# script. If the report suggests override_* values, edit this call and run
+# it again. Repeat until the precheck reports PASS.
+# When the precheck reports PASS, comment out or remove this call before
+# running the real processing phase below.
+# -------------------------------------------------------------------------
 cnr2_bm3d_precheck_video_file(source_filename)
 
-# Step 2: after iteratively reviewing the precheck output, comment out the precheck call above.
-
-# Step 3: open the source however you prefer. (bestsource example here)
+# -------------------------------------------------------------------------
+# Phase 2: real processing.
+# Do not run this phase while the precheck call above is still active,
+# because the precheck deliberately stops the script.
+# -------------------------------------------------------------------------
+# Open the source however you prefer. BestSource is shown here only as an example.
 clip = core.bs.VideoSource(source_filename)
 
-# Step 4: paste/review the SetFrameProps() block recommended by the precheck.
+# Paste/check/edit the SetFrameProps() block recommended by the precheck.
 # Example only. Use the values printed for your actual source.
 clip = core.std.SetFrameProps(
     clip,
@@ -89,12 +128,10 @@ clip = core.std.SetFrameProps(
     _ChromaLocation=0,   # LEFT
     _SARNum=16,
     _SARDen=15,
-    _DurationNum=1,
-    _DurationDen=25,
 )
 
-# Step 5: now run the real cnr2_bm3d processing. 
-# Refer to the README.md for help and examples of light,medium,heavy settings
+# Now run the real cnr2_bm3d processing.
+# Refer to the README.md for help and examples of light, medium, and heavy settings.
 clip = cnr2_bm3d(
     clip,
     sigma_uv=3.5,
@@ -105,6 +142,8 @@ clip = cnr2_bm3d(
     deinterlace_rate="same",
     deinterlace_quality="standard",
 )
+
+# Other processing here, possibly including anamorphic SAR settings if required.
 
 clip.set_output()
 ```
