@@ -505,7 +505,7 @@ heavy = cnr2_bm3d(
 heavy = cnr2_bm3d(
     clip,
     sigma_uv=16.0,
-    sigma_luma=16.0,
+    sigma_luma=0.0,
     radius=2,
     full_quality_denoise=True,
     deinterlace=True,
