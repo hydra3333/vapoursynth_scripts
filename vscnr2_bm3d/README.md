@@ -20,6 +20,7 @@ For example, 720x576 PAL and 720x480 NTSC sources may be intended for 4:3 or 16:
 even when the stored frame dimensions suggest a different ratio.
 DAR is derived only from available metadata, thus Display Aspect Ratio (DAR) is calculated incorrectly for that ...
 so you may need to set or correct `_SARNum/_SARDen` yourself after denoising and before `set_output()`.    
+
 Common cases:  `DAR = (width * _SARNum) / (height * _SARDen)`    
 | Source type                     | Stored frame size | Intended DAR | _SARNum | _SARDen | Derived DAR calculation    |
 | ------------------------------- | ----------------: | -----------: | ------: | ------: | -------------------------- |
