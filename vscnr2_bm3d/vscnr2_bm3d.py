@@ -444,8 +444,6 @@ def cnr2_bm3d_precheck_video_file(
     override_ChromaLocation: Optional[int] = None,
     override_SARNum: Optional[int] = None,
     override_SARDen: Optional[int] = None,
-    override_DurationNum: Optional[int] = None,
-    override_DurationDen: Optional[int] = None,
     override_Rotation: Optional[int] = None,
     override_FlipHorizontal: Optional[int] = None,
     override_FlipVertical: Optional[int] = None,
@@ -518,8 +516,6 @@ def cnr2_bm3d_precheck_video_file(
         "_ChromaLocation",
         "_SARNum",
         "_SARDen",
-        "_DurationNum",
-        "_DurationDen",
         "Rotation",
         "FlipHorizontal",
         "FlipVertical",
@@ -553,8 +549,6 @@ def cnr2_bm3d_precheck_video_file(
         "_ChromaLocation": "override_ChromaLocation",
         "_SARNum": "override_SARNum",
         "_SARDen": "override_SARDen",
-        "_DurationNum": "override_DurationNum",
-        "_DurationDen": "override_DurationDen",
         "Rotation": "override_Rotation",
         "FlipHorizontal": "override_FlipHorizontal",
         "FlipVertical": "override_FlipVertical",
@@ -681,8 +675,6 @@ def cnr2_bm3d_precheck_video_file(
         )
         _validate_override_int("override_SARNum", override_SARNum, minimum=1)
         _validate_override_int("override_SARDen", override_SARDen, minimum=1)
-        _validate_override_int("override_DurationNum", override_DurationNum, minimum=1)
-        _validate_override_int("override_DurationDen", override_DurationDen, minimum=1)
         _validate_override_int("override_Rotation", override_Rotation)
         _validate_override_int("override_FlipHorizontal", override_FlipHorizontal, {0, 1})
         _validate_override_int("override_FlipVertical", override_FlipVertical, {0, 1})
@@ -703,10 +695,6 @@ def cnr2_bm3d_precheck_video_file(
             overrides["_SARNum"] = override_SARNum
         if override_SARDen is not None:
             overrides["_SARDen"] = override_SARDen
-        if override_DurationNum is not None:
-            overrides["_DurationNum"] = override_DurationNum
-        if override_DurationDen is not None:
-            overrides["_DurationDen"] = override_DurationDen
         if override_Rotation is not None:
             overrides["Rotation"] = override_Rotation
         if override_FlipHorizontal is not None:
@@ -987,14 +975,6 @@ def cnr2_bm3d_precheck_video_file(
         )
         return None, None
 
-    def _duration_props_from_clip(clip: vs.VideoNode) -> dict[str, int]:
-        if clip.fps_num > 0 and clip.fps_den > 0:
-            return {
-                "_DurationNum": int(clip.fps_den),
-                "_DurationDen": int(clip.fps_num),
-            }
-        return {}
-
     def _run_vstools_heuristics(
         prepared_clip: vs.VideoNode,
     ) -> tuple[dict[str, Any], list[str]]:
@@ -1063,11 +1043,7 @@ def cnr2_bm3d_precheck_video_file(
                 continue
             meaning = _meaning_for_prop(prop, value)
             comment = f"  # {meaning}" if meaning else ""
-            if prop == "_DurationNum":
-                comment = "  # frame duration numerator"
-            elif prop == "_DurationDen":
-                comment = "  # frame duration denominator"
-            elif prop == "_SARNum":
+            if prop == "_SARNum":
                 comment = "  # sample aspect ratio numerator"
             elif prop == "_SARDen":
                 comment = "  # sample aspect ratio denominator"
@@ -1086,9 +1062,6 @@ def cnr2_bm3d_precheck_video_file(
             _print_stderr(f"{indent}Valid {PROP_TO_OVERRIDE_NAME[prop]} values:")
             for enum_value in enum_cls:
                 _print_stderr(f"{indent}  {int(enum_value)} = {enum_value.name}")
-            return
-        if prop in {"_SARNum", "_SARDen", "_DurationNum", "_DurationDen"}:
-            _print_stderr(f"{indent}Valid {PROP_TO_OVERRIDE_NAME[prop]} values: positive integers")
             return
         if prop == "Rotation":
             _print_stderr(f"{indent}Valid override_Rotation values: integer rotation metadata, usually 0/90/180/270")
@@ -1118,7 +1091,6 @@ def cnr2_bm3d_precheck_video_file(
             rows.append([prop, values])
         rows.extend([
             ["_SARNum/_SARDen", "positive integers, e.g. 1/1, 16/15, 32/27"],
-            ["_DurationNum/Den", "frame duration, e.g. 1/25 or 1001/30000"],
             ["Rotation", "usually 0, 90, 180, 270 if present"],
             ["FlipHorizontal", "0=false, 1=true if present"],
             ["FlipVertical", "0=false, 1=true if present"],
@@ -1338,7 +1310,6 @@ def cnr2_bm3d_precheck_video_file(
         if clip is not None:
             frame = clip.get_frame(0)
             frame_props = _props_from_frame(frame)
-            frame_props.update(_duration_props_from_clip(clip))
             clip_timing = {
                 "FPS": _format_fps(clip.fps_num, clip.fps_den),
                 "fps_num": clip.fps_num,
